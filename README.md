@@ -42,15 +42,24 @@ There are two kinds of users, each with their own login and dashboard:
 
 | Role | How the account is made | What they can do |
 |---|---|---|
-| **Farmer** (donor) | Signs up on the website. Starts as **Pending** until a coordinator approves. | Post surplus harvest, follow each donation (which food bank, pickup time, volunteer), see how many kg they've rescued. Sees **only their own farm**. |
+| **Farmer** (donor) | Signs up on the website. Starts as **Pending** until a coordinator approves. | Use the **Farmer portal** (Home, Log surplus, My donations, Farm profile): log surplus crops, follow each donation's status history, edit or delete it while Posted, keep their farm address and contact details up to date. Sees **only their own farm**. |
 | **Coordinator** (admin) | Created by the operating office (barangay, city agriculture office, NGO or food bank network) in Supabase. No public sign-up. | Approve/reject/suspend farmers, match donations to food banks, schedule pickups, assign volunteers, manage volunteers and recipients, view reports, undo mistakes. |
+
+The farmer portal:
+
+| Page | Purpose |
+|---|---|
+| **Home** | Totals (active, next pickup, received, kg rescued) and recent donations. |
+| **Log surplus** | Crop type (from the crop **shelf-life table**), quantity and unit, harvest date, condition, saved farm address or a different pickup address, *I need pickup* / *I can deliver*, notes. "Before you post" shows the shelf life and days remaining. |
+| **My donations** | Filters with counts (All, Posted, Matched, Received, Rejected, Expired), a table, and a detail panel with status history. Edit/Delete while Posted; shows the food bank's reason when Rejected. |
+| **Farm profile** | Contact details, farm name and address, usual logistics, and changing email or password. |
 
 The coordinator's pages:
 
 | Page | Purpose |
 |---|---|
 | **Dashboard** | Today at a glance: active donations, pickups today, farmers waiting for review, food rescued, a priority queue and a rescue-volume chart. |
-| **Donations** | Every donation. Match it to a food bank, schedule its pickup, or cancel it. |
+| **Donations** | Every donation. Match it to a food bank, schedule its pickup (or mark it **received** when the farmer delivers), or **reject** it with a reason the farmer sees. |
 | **Pickups** | The pickup schedule. Assign or change the volunteer, reschedule, mark delivered, or cancel. |
 | **Farmers** | New applications and partner farms. Approve, reject, suspend or reactivate. |
 | **Volunteers** | Drivers and helpers: service area, vehicle and capacity, on/off duty. |
@@ -102,14 +111,17 @@ flowchart TD
     A["1. Farmer signs up<br/>(name, mobile, farm, address)"] --> B["Account is PENDING"]
     B --> C{"2. Coordinator reviews<br/>on the Farmers page"}
     C -- Reject --> R["Rejected<br/>(can be reactivated later)"]
-    C -- Approve --> D["3. Farmer posts surplus<br/>(produce, kg, use-by date)"]
-    D --> E["Donation: AVAILABLE"]
+    C -- Approve --> D["3. Farmer logs surplus crop<br/>(crop, quantity, harvest date, pickup or deliver)"]
+    D --> E["Donation: POSTED<br/>(expires after the crop's shelf life)"]
     E --> F["4. Coordinator matches it<br/>to an open food bank"]
     F --> G["Donation: MATCHED"]
-    G --> H["5. Coordinator schedules a pickup<br/>and assigns a volunteer"]
+    G --> H["5. Needs pickup: coordinator schedules it<br/>and assigns a volunteer"]
+    G --> H2["5. Farmer delivers it themselves"]
     H --> I["Donation: PICKUP SCHEDULED"]
     I --> J["6. Volunteer delivers;<br/>coordinator marks it Done"]
-    J --> K["Donation: DELIVERED ✔"]
+    H2 --> J2["6. Coordinator marks it Received"]
+    J --> K["Donation: RECEIVED ✔"]
+    J2 --> K
     K --> L["7. Totals update everywhere:<br/>farmer dashboard, coordinator dashboard, Reports"]
 ```
 
@@ -119,13 +131,17 @@ At every step the **farmer sees the update on their own dashboard** (which food 
 
 ```mermaid
 stateDiagram-v2
-    [*] --> New: farmer or coordinator posts
-    New --> Matched: matched to a food bank
-    New --> Cancelled: cancelled
+    [*] --> Posted: farmer logs surplus
+    Posted --> Matched: matched to a food bank
+    Posted --> Rejected: rejected (with reason)
+    Posted --> Expired: shelf life ran out
+    Posted --> [*]: farmer deletes it
     Matched --> PickupScheduled: pickup scheduled
+    Matched --> Received: farmer delivered it
+    Matched --> Rejected: rejected (with reason)
     PickupScheduled --> Matched: pickup cancelled
-    PickupScheduled --> Delivered: marked delivered
-    Delivered --> [*]
+    PickupScheduled --> Received: marked delivered
+    Received --> [*]
 ```
 
 ### What happens behind one click
@@ -176,6 +192,7 @@ erDiagram
     AUTH_USERS ||--|| PROFILES : "has"
     PROFILES ||--o| FARMERS : "farmer account owns"
     FARMERS ||--o{ DONATIONS : "donates"
+    CROPS ||--o{ DONATIONS : "shelf life of"
     RECIPIENTS ||--o{ DONATIONS : "receives"
     DONATIONS ||--o{ PICKUPS : "picked up by"
     VOLUNTEERS ||--o{ PICKUPS : "assigned to"
@@ -186,8 +203,9 @@ erDiagram
 |---|---|
 | `auth.users` | Login accounts (managed by Supabase Auth). |
 | `profiles` | Name, phone, organization and **role** (`farmer`, `coordinator`, `admin`, `volunteer`). |
-| `farmers` | Farm name, contact, address, cooperative, status (`pending`, `approved`, `rejected`, `suspended`). |
-| `donations` | Produce, kg, farm, food bank, use-by date, status (`new`, `matched`, `pickup_scheduled`, `delivered`, …). |
+| `farmers` | Farm name, contact, address, cooperative, usual logistics, status (`pending`, `approved`, `rejected`, `suspended`). |
+| `crops` | The crop **shelf-life table** (e.g. Pechay 3 days, Tomatoes 7 days) behind the "Crop type" list. |
+| `donations` | Crop, quantity and unit, kg, harvest date, condition, pickup or deliver, pickup address, expiry, food bank, rejection reason, status (`new` = Posted, `matched`, `pickup_scheduled`, `delivered` = Received, `rejected`, `expired`) and when each happened. |
 | `pickups` | Which donation, scheduled time, volunteer, status (`scheduled`, `completed`, `cancelled`). |
 | `volunteers` | Name, phone, service area, vehicle, capacity in kg, on/off duty. |
 | `recipients` | Food banks / kitchens / pantries: type, location, capacity, needs, open / limited / closed. |
@@ -251,6 +269,9 @@ That is why the security lives in the database itself, not only in the website:
 Automatic database work:
 
 - **On sign-up**, a trigger (`handle_new_user`) creates the person's `profiles` row and, for farmers, a `farmers` row with status `pending`.
+- **Status history:** a trigger records when a donation was matched, rejected, expired or received.
+- **Expiry:** Posted donations past their crop's shelf life are marked **Expired** (`expire_overdue_donations`) whenever donations are listed.
+- **Farm profile:** farmers save their details through `update_my_farm`, which can't change their approval status.
 - **Views** pre-calculate the dashboard numbers.
 - The backend **never uses the secret `service_role` key**, so every action is checked by these rules.
 

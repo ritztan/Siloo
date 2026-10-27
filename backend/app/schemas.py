@@ -1,6 +1,6 @@
 """Request bodies. Field names match the database columns."""
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Optional
 from uuid import UUID
@@ -128,7 +128,7 @@ class RecipientUpdate(BaseModel):
 
 # ---------- donations ----------
 
-DonationStatus = Literal["new", "matched", "pickup_scheduled", "delivered", "expired", "cancelled"]
+DonationStatus = Literal["new", "matched", "pickup_scheduled", "delivered", "rejected", "expired", "cancelled"]
 
 
 class DonationIn(BaseModel):
@@ -149,19 +149,42 @@ class DonationUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+Unit = Literal["kg", "g", "tonne"]
+Condition = Literal["fresh", "good", "fair"]
+Logistics = Literal["pickup", "deliver"]
+
+
 class FarmerDonationIn(BaseModel):
-    """A donation posted by a farmer for their own farm."""
-    produce: str = Field(min_length=1)
-    quantity_kg: Decimal = Field(gt=0)
-    expires_at: Optional[datetime] = None
-    notes: Optional[str] = None
+    """A donation a farmer logs from the "Log surplus crop" form (also used for Edit)."""
+    crop_id: UUID
+    quantity: Decimal = Field(gt=0)
+    unit: Unit = "kg"
+    harvested_at: date
+    condition: Condition = "fresh"
+    logistics: Logistics = "pickup"
+    use_saved_location: bool = True
+    # only when use_saved_location is False: where to collect the crop
+    pickup_address: Optional[str] = Field(default=None, max_length=300)
+    notes: Optional[str] = Field(default=None, max_length=500)
 
 
-class FarmerDonationUpdate(BaseModel):
-    produce: Optional[str] = None
-    quantity_kg: Optional[Decimal] = Field(default=None, gt=0)
-    expires_at: Optional[datetime] = None
-    notes: Optional[str] = None
+FarmerDonationUpdate = FarmerDonationIn
+
+
+class FarmProfileUpdate(BaseModel):
+    """The "Farm profile" form."""
+    contact_name: str = Field(min_length=1)
+    phone: str = Field(min_length=7)
+    email: EmailStr
+    cooperative: Optional[str] = None
+    farm_name: str = Field(min_length=1)
+    location: str = Field(min_length=1)  # barangay, municipality / city
+    usual_logistics: Logistics = "pickup"
+    new_password: Optional[str] = Field(default=None, min_length=6)
+
+
+class RejectDonation(BaseModel):
+    reason: str = Field(min_length=3, max_length=300)
 
 
 # ---------- pickups ----------

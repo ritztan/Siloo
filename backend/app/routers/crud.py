@@ -27,6 +27,7 @@ def crud_router(
     name_of: Callable[[dict], str] = lambda row: row.get("name") or "record",
     added_word: str = "Added",
     describe_update: Optional[Callable[[Client, dict, dict], str]] = None,
+    before_list: Optional[Callable[[Client], None]] = None,
 ) -> APIRouter:
     router = APIRouter(prefix=prefix, tags=[table])
 
@@ -38,6 +39,8 @@ def crud_router(
         db: Client = Depends(get_db),
     ):
         """q searches by name; status filters tables that have a status column."""
+        if before_list:
+            before_list(db)
         query = db.table(table).select(select).order(order_by, desc=True).limit(min(max(limit, 1), 500))
         if q and search_column:
             query = query.ilike(search_column, f"%{q}%")

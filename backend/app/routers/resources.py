@@ -11,10 +11,11 @@ from .. import activity
 from ..db import get_db, get_token, one, run
 from ..schemas import (
     DonationIn, DonationUpdate, FarmerIn, FarmerUpdate, PickupIn, PickupUpdate,
-    RecipientIn, RecipientUpdate, VolunteerIn, VolunteerUpdate, to_row,
+    RecipientIn, RecipientUpdate, RejectDonation, VolunteerIn, VolunteerUpdate, to_row,
 )
 from .auth import _user_id
 from .crud import crud_router
+from .farmer import expire_overdue
 
 # ---------- farmers ----------
 
@@ -94,6 +95,8 @@ def _describe_donation(db: Client, before: dict, changes: dict) -> str:
         return f"Matched {produce} → {recipient['name'] if recipient else 'a food bank'}"
     if changes.get("status") == "cancelled":
         return f"Cancelled {produce}"
+    if changes.get("status") == "delivered":
+        return f"Marked {produce} received"
     return f"Edited {produce}"
 
 
@@ -108,7 +111,39 @@ donations = crud_router(
     name_of=lambda row: row.get("produce") or "donation",
     added_word="Logged",
     describe_update=_describe_donation,
+    before_list=expire_overdue,
 )
+
+
+@donations.post("/{donation_id}/reject", tags=["donations"])
+def reject_donation(donation_id: UUID, body: RejectDonation, db: Client = Depends(get_db)):
+    """The food bank can't take it: mark Rejected with a reason the farmer will see."""
+    before = activity.snapshot(db, "donations", str(donation_id))
+    rows = run(
+        db.table("donations").update({"status": "rejected", "rejection_reason": body.reason.strip()})
+        .eq("id", str(donation_id)).in_("status", ["new", "matched"])
+    )
+    updated = one(rows, "Donation (only Posted or Matched donations can be rejected)")
+    if before:
+        activity.log(db, action="donations.rejected", table="donations", record_id=str(donation_id),
+                     kind="update", row=before, label=f"Rejected {before['produce']}")
+    return updated
+
+
+@donations.post("/{donation_id}/receive", tags=["donations"])
+def receive_donation(donation_id: UUID, db: Client = Depends(get_db)):
+    """For farmers who deliver it themselves: the food bank received it."""
+    before = activity.snapshot(db, "donations", str(donation_id))
+    rows = run(
+        db.table("donations")
+        .update({"status": "delivered", "delivered_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", str(donation_id)).in_("status", ["matched", "pickup_scheduled"])
+    )
+    updated = one(rows, "Donation (match it to a food bank first)")
+    if before:
+        activity.log(db, action="donations.received", table="donations", record_id=str(donation_id),
+                     kind="update", row=before, label=f"Marked {before['produce']} received")
+    return updated
 
 # ---------- pickups ----------
 

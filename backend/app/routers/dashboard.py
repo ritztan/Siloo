@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from supabase import Client
 
 from ..db import get_db, run
+from .farmer import expire_overdue
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -15,6 +16,7 @@ def dashboard(days: int = 7, db: Client = Depends(get_db)):
     """Stat cards, priority queue, recent activity, and the rescue-volume chart.
     days = 7 or 30 for the chart range."""
     days = 30 if days > 7 else 7
+    expire_overdue(db)
     stats = run(db.table("dashboard_stats").select("*"))
     stats = stats[0] if stats else {}
 

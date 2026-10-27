@@ -20,6 +20,7 @@ export type DonationStatus =
   | "matched"
   | "pickup_scheduled"
   | "delivered"
+  | "rejected"
   | "expired"
   | "cancelled"
 
@@ -42,6 +43,9 @@ export type Farm = {
   cooperative: string | null
   status: FarmStatus
   created_at: string
+  latitude?: number | string | null
+  longitude?: number | string | null
+  usual_logistics?: "pickup" | "deliver"
 }
 
 export type Account = { profile: Profile; farmer: Farm | null; email?: string }

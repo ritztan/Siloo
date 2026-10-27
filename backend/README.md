@@ -37,7 +37,8 @@ backend/
 │   ├── migrations/
 │   │   ├── 20261027000000_init_schema.sql      ← tables, security rules, views
 │   │   ├── 20261027100000_farmer_accounts.sql  ← farmer sign-up + farmer-only rules
-│   │   └── 20261027200000_volunteer_recipient_details.sql  ← vehicle, service area, capacity, needs
+│   │   ├── 20261027200000_volunteer_recipient_details.sql  ← vehicle, service area, capacity, needs
+│   │   └── 20261027300000_farmer_portal.sql  ← crop shelf-life table, harvest/condition/logistics, rejected & expired
 │   ├── move_old_tables.sql   ← only if the project already had older Silo tables
 │   └── seed.sql              ← sample data
 ├── tests/test_smoke.py
@@ -54,7 +55,8 @@ In Supabase → **SQL Editor**, run each file in its own **New query**, in this 
 1. `supabase/migrations/20261027000000_init_schema.sql`
 2. `supabase/migrations/20261027100000_farmer_accounts.sql`
 3. `supabase/migrations/20261027200000_volunteer_recipient_details.sql`
-4. (Optional) `supabase/seed.sql` for sample data
+4. `supabase/migrations/20261027300000_farmer_portal.sql`
+5. (Optional) `supabase/seed.sql` for sample data
 
 Then go to **Authentication → Sign In / Providers → Email** and turn off **Confirm email** while testing. Otherwise new accounts must click a link in their email before they can log in.
 
@@ -139,10 +141,13 @@ Open **http://localhost:5173**. The website talks to the API at `http://127.0.0.
 | POST | `/auth/refresh` | New access token (they expire after ~1 hour) |
 | POST | `/auth/signout` | Sign out this device |
 | GET / PATCH | `/auth/me` | Your profile, and your farm + status if you're a farmer |
-| GET | `/farmer/dashboard` | Farmer: your farm, totals, and your donations |
-| POST | `/farmer/donations` | Farmer: post surplus (approved farmers only) |
-| PATCH | `/farmer/donations/{id}` | Farmer: edit a donation that isn't matched yet |
-| POST | `/farmer/donations/{id}/cancel` | Farmer: cancel a donation that isn't matched yet |
+| GET | `/farmer/dashboard` | Farmer: your farm, totals, and all your donations |
+| GET | `/farmer/crops` | Crop shelf-life table (for the "Crop type" list) |
+| POST | `/farmer/donations` | Farmer: log surplus crop (`crop_id`, `quantity`, `unit`, `harvested_at`, `condition`, `logistics`, `use_saved_location`, `pickup_address`, `notes`) — approved farmers only |
+| GET / PATCH / DELETE | `/farmer/donations/{id}` | Farmer: view; edit or delete while Posted |
+| GET / PATCH | `/farmer/profile` | Farmer: contact, farm address, usual logistics; change email / password |
+| POST | `/donations/{id}/reject` | Coordinator: reject with a `reason` the farmer sees |
+| POST | `/donations/{id}/receive` | Coordinator: mark received (farmer delivered it) |
 | GET | `/dashboard?days=7` | Coordinator: stat cards, priority queue, activity, chart (`days=7` or `30`) |
 | GET | `/sidebar` | Coordinator sidebar: last undoable change + pending-farmers count |
 | POST | `/activity/undo` | Undo your most recent change (approve/reject, match, schedule, assign, deliver, cancel, add/edit/remove) |

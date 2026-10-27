@@ -1,5 +1,6 @@
 """Farmers, volunteers, recipients, donations, pickups."""
 
+from typing import Optional
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -75,8 +76,8 @@ PICKUP_SELECT = (
 
 @pickups.get("")
 def list_pickups(
-    day: str | None = None,
-    status: str | None = None,
+    day: Optional[str] = None,
+    status: Optional[str] = None,
     unassigned: bool = False,
     db: Client = Depends(get_db),
 ):

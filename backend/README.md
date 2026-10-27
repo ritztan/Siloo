@@ -39,7 +39,7 @@ Our project: `https://nnpxgjnthmyknphjxhwu.supabase.co`
 
 ## 2. Run the Python API
 
-You need Python 3.10 or newer.
+You need Python 3.9 or newer (the one built into macOS works).
 
 ```bash
 cd backend

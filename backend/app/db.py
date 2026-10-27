@@ -5,7 +5,7 @@ Row Level Security rules (in supabase/migrations) decide what they can
 see and change. The backend never uses the service_role key.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -23,7 +23,7 @@ def new_client() -> Client:
 
 
 def get_token(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
 ) -> str:
     if credentials is None or not credentials.credentials:
         raise HTTPException(

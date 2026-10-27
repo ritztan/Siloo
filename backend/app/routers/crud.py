@@ -1,5 +1,6 @@
 """List / get / create / update / delete endpoints for a simple table."""
 
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,7 +19,7 @@ def crud_router(
     create_model: type[BaseModel],
     update_model: type[BaseModel],
     order_by: str = "created_at",
-    search_column: str | None = None,
+    search_column: Optional[str] = None,
     select: str = "*",
     has_status: bool = False,
 ) -> APIRouter:
@@ -26,8 +27,8 @@ def crud_router(
 
     @router.get("")
     def list_items(
-        q: str | None = None,
-        status: str | None = None,
+        q: Optional[str] = None,
+        status: Optional[str] = None,
         limit: int = 100,
         db: Client = Depends(get_db),
     ):

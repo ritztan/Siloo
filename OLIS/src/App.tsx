@@ -92,6 +92,24 @@ const ROLE_LABELS: Record<string, string> = {
   farmer: "Farmer",
 }
 
+// Reload a page's data every 30 seconds and whenever you come back to the tab,
+// so new sign-ups, donations and pickups show up without pressing refresh.
+function useAutoRefresh(load: () => void, seconds = 30) {
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") load()
+    }
+    const timer = window.setInterval(refresh, seconds * 1000)
+    window.addEventListener("focus", refresh)
+    document.addEventListener("visibilitychange", refresh)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener("focus", refresh)
+      document.removeEventListener("visibilitychange", refresh)
+    }
+  }, [load, seconds])
+}
+
 function errorText(error: unknown) {
   return error instanceof ApiError || error instanceof Error
     ? error.message
@@ -1031,6 +1049,7 @@ function DashboardScreen({ go }: { go: (s: Screen) => void }) {
   }, [range])
 
   useEffect(load, [load])
+  useAutoRefresh(load)
 
   const stats = data?.stats
   const show = (value: number | string | undefined) => (value === undefined ? "…" : value)
@@ -1451,6 +1470,7 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
   }, [])
 
   useEffect(load, [load])
+  useAutoRefresh(load)
 
   const open = (next: typeof panel) => {
     setMessage(null)
@@ -1906,6 +1926,7 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
   }, [])
 
   useEffect(load, [load])
+  useAutoRefresh(load)
 
   const manage = (pickup: PickupRecord) => {
     setMessage(null)
@@ -2220,6 +2241,7 @@ function FarmersScreen({ go }: { go: (s: Screen) => void }) {
   }, [])
 
   useEffect(load, [load])
+  useAutoRefresh(load)
 
   const review = async (farm: FarmRecord, action: "approve" | "reject" | "suspend") => {
     if (action !== "approve" && !window.confirm(`${action === "reject" ? "Reject" : "Suspend"} ${farm.farm_name}?`)) return
@@ -2519,6 +2541,7 @@ function VolunteersScreen({ go }: { go: (s: Screen) => void }) {
   }, [])
 
   useEffect(load, [load])
+  useAutoRefresh(load)
 
   const save = async (work: () => Promise<unknown>, text: string, after?: () => void) => {
     setSaving(true)
@@ -3012,6 +3035,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
   }, [])
 
   useEffect(load, [load])
+  useAutoRefresh(load)
 
   const save = async (work: () => Promise<unknown>, text: string, after?: () => void) => {
     setSaving(true)
@@ -3421,6 +3445,7 @@ function ReportsScreen({ go }: { go: (s: Screen) => void }) {
   }, [period])
 
   useEffect(load, [load])
+  useAutoRefresh(load)
 
   const totals = data?.totals
   const phrase = REPORT_PERIODS.find((p) => p.value === period)?.phrase ?? ""
@@ -3737,6 +3762,17 @@ function FarmerStatusScreen({ go }: { go: (s: Screen) => void }) {
     }
   }
 
+  // Check in the background so the farmer is let in as soon as they're approved
+  const quietCheck = useCallback(() => {
+    loadAccount()
+      .then((latest) => {
+        if (latest.farmer?.status !== account?.farmer?.status) setAccount(latest)
+        if (latest.farmer?.status === "approved") go("farmer-dashboard")
+      })
+      .catch(() => null)
+  }, [account])
+  useAutoRefresh(quietCheck, 20)
+
   const leave = async () => {
     await signOut()
     setAccount(null)
@@ -3858,6 +3894,7 @@ function FarmerDashboardScreen({ go }: { go: (s: Screen) => void }) {
   }, [account])
 
   useEffect(load, [])
+  useAutoRefresh(load)
 
   const postDonation = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()

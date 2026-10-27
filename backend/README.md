@@ -72,6 +72,15 @@ where id = (select id from auth.users where email = 'carla@example.com');
 
 Now they can use the **Coordinator login** on the website.
 
+### Password reset emails
+"Forgot password?" is on both login cards. For the link in the email to open the website:
+
+1. Supabase → **Authentication → URL Configuration**.
+2. **Site URL:** `http://localhost:5173` (or your website's address once it's online).
+3. **Redirect URLs:** add `http://localhost:5173/**` (and your online address later). Click **Save**.
+
+Supabase's built-in email sender only delivers to **members of your Supabase project** and only a few emails per hour. To send reset emails to any farmer, add your own email service under **Authentication → Emails → SMTP Settings** (for example Gmail with an app password, Brevo, or Resend).
+
 ## 2. Run the Python API
 
 You need Python 3.9 or newer (the one built into macOS works).
@@ -125,6 +134,8 @@ Open **http://localhost:5173**. The website talks to the API at `http://127.0.0.
 |---|---|---|
 | POST | `/auth/signup` | Farmer sign-up (`email`, `password`, `full_name`, `phone`, `farm_name`, `farm_address`, `cooperative`) |
 | POST | `/auth/signin` | Log in. Send `role: "farmer"` or `"coordinator"` to match the login card |
+| POST | `/auth/forgot` | Email a password-reset link (`email`, `redirect_to`) — farmers and coordinators |
+| POST | `/auth/reset` | Set a new password with the token from the reset link (`access_token`, `password`) |
 | POST | `/auth/refresh` | New access token (they expire after ~1 hour) |
 | POST | `/auth/signout` | Sign out this device |
 | GET / PATCH | `/auth/me` | Your profile, and your farm + status if you're a farmer |

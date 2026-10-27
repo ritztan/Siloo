@@ -44,9 +44,10 @@ type Screen =
   | "reports"
   | "farmer-status"
   | "farmer-dashboard"
+  | "reset-password"
 
 // Screens anyone can open without logging in
-const PUBLIC_SCREENS: Screen[] = ["splash", "signin", "signup"]
+const PUBLIC_SCREENS: Screen[] = ["splash", "signin", "signup", "reset-password"]
 // Screens for farmer accounts
 const FARMER_SCREENS: Screen[] = ["farmer-status", "farmer-dashboard"]
 
@@ -608,10 +609,191 @@ function SplashScreen({ go }: { go: (s: Screen) => void }) {
   )
 }
 
+// ── Forgot password (used on both login cards) ────────────────────────────────
+function ForgotPassword({ email }: { email: string }) {
+  const [open, setOpen] = useState(false)
+  const [address, setAddress] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<{ kind: "error" | "success"; text: string } | null>(null)
+
+  const send = async (event: FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setNote(null)
+    try {
+      const result = await api.post<{ message: string }>("/auth/forgot", {
+        email: address.trim(),
+        // the link in the email comes back to this website
+        redirect_to: `${window.location.origin}${window.location.pathname}`,
+      })
+      setNote({ kind: "success", text: result.message })
+    } catch (err) {
+      setNote({ kind: "error", text: errorText(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="text-link forgot-link"
+        onClick={() => {
+          setAddress(email)
+          setOpen(true)
+        }}
+      >
+        Forgot password?
+      </button>
+    )
+  }
+
+  return (
+    <form className="forgot-box" onSubmit={send}>
+      <label>
+        <span>Email for the reset link</span>
+        <input
+          required
+          type="email"
+          value={address}
+          onChange={(event) => setAddress(event.target.value)}
+          placeholder="you@example.com"
+        />
+      </label>
+      <div className="forgot-actions">
+        <button type="submit" className="outline-action" disabled={busy}>
+          {busy ? "Sending..." : "Send reset link"}
+        </button>
+        <button type="button" className="text-link" onClick={() => setOpen(false)}>
+          Close
+        </button>
+      </div>
+      {note && (
+        <p className={`auth-feedback ${note.kind === "error" ? "auth-error" : "auth-success"}`} role={note.kind === "error" ? "alert" : "status"}>
+          {note.text}
+        </p>
+      )}
+    </form>
+  )
+}
+
+// ── Reset password (opened from the link in the reset email) ──────────────────
+// Supabase sends people back to the website with the details after "#", e.g.
+//   http://localhost:5173/#access_token=...&type=recovery
+// or, if the link is too old:  #error=access_denied&error_code=otp_expired&...
+function readRecoveryLink(): { token: string | null; error: string | null } | null {
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""))
+  const isRecovery = hash.get("type") === "recovery"
+  const error = hash.get("error_description") || hash.get("error")
+  if (!isRecovery && !error) return null
+  // remove the token from the address bar so it isn't bookmarked or shared
+  window.history.replaceState(null, "", window.location.pathname + window.location.search)
+  return {
+    token: isRecovery ? hash.get("access_token") : null,
+    error: error ? error.replace(/\+/g, " ") : null,
+  }
+}
+
+const RECOVERY = readRecoveryLink()
+
+function ResetPasswordScreen({ go }: { go: (s: Screen) => void }) {
+  const [password, setPassword] = useState("")
+  const [confirm, setConfirm] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState(false)
+  const [error, setError] = useState(
+    RECOVERY?.token
+      ? ""
+      : RECOVERY?.error
+        ? "This reset link has expired or was already used. Go back to login and request a new one."
+        : "Open this page from the link in your reset email.",
+  )
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault()
+    if (password !== confirm) {
+      setError("The two passwords don't match.")
+      return
+    }
+    setBusy(true)
+    setError("")
+    try {
+      await api.post("/auth/reset", { access_token: RECOVERY?.token, password })
+      setDone(true)
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <AuthLayout go={go}>
+      <section className="signup-success reset-card" role="status">
+        <span className="signup-success-icon">
+          <Icon name="lock" size={24} />
+        </span>
+        <p className="auth-eyebrow">{done ? "All set" : "Reset password"}</p>
+        <h1>{done ? "Your password is updated." : "Choose a new password."}</h1>
+        {done ? (
+          <>
+            <p>You can now log in with your new password, as a farmer or coordinator.</p>
+            <button type="button" className="auth-submit" onClick={() => go("signin")}>
+              Go to login
+            </button>
+          </>
+        ) : RECOVERY?.token ? (
+          <form className="reset-form" onSubmit={save}>
+            <label>
+              <span>New password</span>
+              <input
+                required
+                minLength={6}
+                type="password"
+                autoComplete="new-password"
+                placeholder="At least 6 characters"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </label>
+            <label>
+              <span>Confirm new password</span>
+              <input
+                required
+                minLength={6}
+                type="password"
+                autoComplete="new-password"
+                placeholder="Re-enter the new password"
+                value={confirm}
+                onChange={(event) => setConfirm(event.target.value)}
+              />
+            </label>
+            <button type="submit" className="auth-submit" disabled={busy}>
+              {busy ? "Saving..." : "Save new password"}
+            </button>
+            {error && (
+              <p className="auth-feedback auth-error" role="alert">
+                {error}
+              </p>
+            )}
+          </form>
+        ) : (
+          <>
+            <p>{error}</p>
+            <button type="button" className="auth-submit" onClick={() => go("signin")}>
+              Back to login
+            </button>
+          </>
+        )}
+      </section>
+    </AuthLayout>
+  )
+}
+
 // ── Sign In Screen ────────────────────────────────────────────────────────────
 function SignInScreen({ go }: { go: (s: Screen) => void }) {
   const { setAccount } = useSession()
-  const [resetMessage, setResetMessage] = useState("")
   const [farmerEmail, setFarmerEmail] = useState("")
   const [farmerPassword, setFarmerPassword] = useState("")
   const [coordEmail, setCoordEmail] = useState("")
@@ -703,22 +885,7 @@ function SignInScreen({ go }: { go: (s: Screen) => void }) {
                 </p>
               )}
             </form>
-            <button
-              type="button"
-              className="text-link"
-              onClick={() =>
-                setResetMessage(
-                  "Password reset isn't set up yet. Contact your coordinator for help.",
-                )
-              }
-            >
-              Forgot password?
-            </button>
-            {resetMessage && (
-              <p className="auth-feedback" role="status">
-                {resetMessage}
-              </p>
-            )}
+            <ForgotPassword email={farmerEmail} />
             <div className="login-card-bottom">
               <span>New farmer?</span>
               <button
@@ -773,6 +940,7 @@ function SignInScreen({ go }: { go: (s: Screen) => void }) {
                 </p>
               )}
             </form>
+            <ForgotPassword email={coordEmail} />
             <p className="login-help">
               Coordinator accounts are set up by the operating office (barangay,
               city agriculture office, NGO or food bank network desk). No public
@@ -4231,7 +4399,8 @@ function FarmerDashboardScreen({ go }: { go: (s: Screen) => void }) {
 // App
 // ────────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [screen, setScreen] = useState<Screen>("splash")
+  // A password-reset link opens the reset page; everything else starts at the splash
+  const [screen, setScreen] = useState<Screen>(RECOVERY ? "reset-password" : "splash")
   const [account, setAccount] = useState<Account | null>(null)
   const [pendingFarmers, setPendingFarmers] = useState<number | null>(null)
 
@@ -4263,6 +4432,7 @@ export default function App() {
     reports: <ReportsScreen go={go} />,
     "farmer-status": <FarmerStatusScreen go={go} />,
     "farmer-dashboard": <FarmerDashboardScreen go={go} />,
+    "reset-password": <ResetPasswordScreen go={go} />,
   }
 
   return (

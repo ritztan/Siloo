@@ -582,3 +582,17 @@ h1:before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; bord
 .undo-card button:hover { background: rgba(255,255,255,.14); }
 .undo-card button:disabled { opacity: .6; cursor: wait; }
 .undo-card .undo-note { margin-top: 7px; color: #a8d18d; font-size: 8px; line-height: 1.4; }
+
+/* Forgot / reset password */
+.login-card > .forgot-link { margin-top: 12px; align-self: flex-start; }
+.forgot-box { margin-top: 12px; padding: 12px; display: grid; gap: 9px; border: 1px solid var(--line); border-radius: 8px; background: #f7faf7; }
+.forgot-box label { display: grid; gap: 6px; color: var(--muted); font-size: 9px; font-weight: 700; }
+.forgot-box input { width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; outline: 0; color: var(--forest); background: white; font: inherit; font-size: 10px; }
+.forgot-box input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(36,115,86,.08); }
+.forgot-actions { display: flex; align-items: center; gap: 12px; }
+.auth-feedback.auth-success { color: var(--green); font-size: 9px; }
+.reset-form { display: grid; gap: 12px; margin-top: 18px; }
+.reset-form label { display: grid; gap: 6px; color: var(--muted); font-size: 9px; font-weight: 700; }
+.reset-form input { width: 100%; height: 40px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; outline: 0; color: var(--forest); background: white; font: inherit; font-size: 11px; }
+.reset-form input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(36,115,86,.08); }
+.reset-form .auth-submit { margin-top: 4px; }

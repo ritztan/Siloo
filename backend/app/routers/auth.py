@@ -1,11 +1,16 @@
 """Sign up (farmers), sign in (farmers or coordinators), and the current account."""
 
+import re
+from typing import Optional
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from supabase import Client
 from supabase_auth.errors import AuthApiError
 
+from .. import config
 from ..db import get_db, get_token, new_client, one, run
-from ..schemas import ProfileUpdate, Refresh, SignIn, SignUp, to_row
+from ..schemas import ForgotPassword, ProfileUpdate, Refresh, ResetPassword, SignIn, SignUp, to_row
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -147,3 +152,64 @@ def update_me(body: ProfileUpdate, token: str = Depends(get_token), db: Client =
         raise HTTPException(422, "Nothing to update.")
     one(run(db.table("profiles").update(changes).eq("id", user.id)), "Profile")
     return {**account(db, user.id), "email": user.email}
+
+
+# ---------- forgot / reset password ----------
+# Uses Supabase's login service directly so the email link works in any browser:
+# it opens the website with #access_token=...&type=recovery in the address.
+
+def gotrue(method: str, path: str, *, token: Optional[str] = None, **kwargs) -> httpx.Response:
+    headers = {"apikey": config.SUPABASE_ANON_KEY}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        return httpx.request(method, f"{config.SUPABASE_URL}/auth/v1{path}", headers=headers, timeout=20, **kwargs)
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "Couldn't reach Supabase. Check your internet connection and try again.") from exc
+
+
+def _gotrue_message(response: httpx.Response) -> str:
+    try:
+        data = response.json()
+    except ValueError:
+        return ""
+    return str(data.get("msg") or data.get("message") or data.get("error_description") or data.get("error") or "")
+
+
+SAFE_REDIRECT = re.compile(r"^https?://[^\s/]+(/[^\s]*)?$")
+
+
+@router.post("/forgot")
+def forgot_password(body: ForgotPassword):
+    """Email a password-reset link. Works for farmers and coordinators.
+    Always answers the same way, so nobody can use it to check which emails have accounts."""
+    params = {}
+    if body.redirect_to and SAFE_REDIRECT.match(body.redirect_to):
+        params["redirect_to"] = body.redirect_to
+    response = gotrue("POST", "/recover", params=params, json={"email": body.email})
+    if response.status_code == 429:
+        raise HTTPException(429, "Too many reset emails were sent. Please wait a few minutes and try again.")
+    if response.status_code >= 500:
+        message = _gotrue_message(response)
+        raise HTTPException(502, f"Supabase couldn't send the email{': ' + message if message else ''}.")
+    return {
+        "ok": True,
+        "message": f"If an account exists for {body.email}, a reset link is on its way. Check your inbox (and spam).",
+    }
+
+
+@router.post("/reset")
+def reset_password(body: ResetPassword):
+    """Set a new password using the token from the reset link."""
+    response = gotrue("PUT", "/user", token=body.access_token, json={"password": body.password})
+    if response.status_code == 200:
+        gotrue("POST", "/logout", token=body.access_token, params={"scope": "local"})
+        return {"ok": True, "message": "Password updated. You can now log in with your new password."}
+    message = _gotrue_message(response).lower()
+    if response.status_code in (401, 403) or "expired" in message or "invalid" in message and "jwt" in message:
+        raise HTTPException(401, "This reset link has expired or was already used. Request a new one.")
+    if "same" in message or "different" in message:
+        raise HTTPException(422, "Your new password must be different from your old one.")
+    if "weak" in message or "at least" in message:
+        raise HTTPException(422, "That password is too weak. Use at least 6 characters.")
+    raise HTTPException(400, _gotrue_message(response) or "Couldn't update the password. Request a new link.")

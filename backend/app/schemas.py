@@ -34,6 +34,18 @@ class Refresh(BaseModel):
     refresh_token: str
 
 
+class ForgotPassword(BaseModel):
+    email: EmailStr
+    # Where the link in the email should open (the website's address)
+    redirect_to: Optional[str] = None
+
+
+class ResetPassword(BaseModel):
+    # The access_token from the reset link (the website reads it from the address bar)
+    access_token: str = Field(min_length=10)
+    password: str = Field(min_length=6)
+
+
 class ProfileUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None

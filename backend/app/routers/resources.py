@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from supabase import Client
 
+from .. import activity
 from ..db import get_db, get_token, one, run
 from ..schemas import (
     DonationIn, DonationUpdate, FarmerIn, FarmerUpdate, PickupIn, PickupUpdate,
@@ -23,7 +24,11 @@ farmers = crud_router(
     search_column="farm_name", has_status=True,
     # each farmer comes with their donations' produce, for counts on the Farmers page
     select="*, donations(produce, status, created_at)",
+    name_of=lambda row: row.get("farm_name") or "farm",
 )
+
+
+REVIEW_WORDS = {"approved": "Approved", "rejected": "Rejected", "suspended": "Suspended"}
 
 
 def _review(farmer_id: UUID, new_status: str, token: str, db: Client) -> dict:
@@ -32,7 +37,12 @@ def _review(farmer_id: UUID, new_status: str, token: str, db: Client) -> dict:
         "reviewed_by": _user_id(token),
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
     }
-    return one(run(db.table("farmers").update(changes).eq("id", str(farmer_id))), "Farmer")
+    before = activity.snapshot(db, "farmers", str(farmer_id))
+    updated = one(run(db.table("farmers").update(changes).eq("id", str(farmer_id))), "Farmer")
+    if before:
+        activity.log(db, action=f"farmers.{new_status}", table="farmers", record_id=str(farmer_id),
+                     kind="update", row=before, label=f"{REVIEW_WORDS[new_status]} {before['farm_name']}")
+    return updated
 
 
 @farmers.post("/{farmer_id}/approve", tags=["farmers"])
@@ -58,6 +68,11 @@ volunteers = crud_router(
     create_model=VolunteerIn, update_model=VolunteerUpdate, search_column="full_name",
     # each volunteer comes with their pickups, for "N pickups" and "On a pickup"
     select="*, pickups(status, scheduled_at)",
+    name_of=lambda row: row.get("full_name") or "volunteer",
+    describe_update=lambda db, before, changes: (
+        f"Set {before['full_name']} {'on' if changes['is_active'] else 'off'} duty"
+        if set(changes) == {"is_active"} else f"Edited {before['full_name']}"
+    ),
 )
 
 recipients = crud_router(
@@ -71,6 +86,17 @@ recipients = crud_router(
 # ---------- donations ----------
 # Each donation comes back with its farm and recipient attached.
 
+
+def _describe_donation(db: Client, before: dict, changes: dict) -> str:
+    produce = before.get("produce") or "donation"
+    if changes.get("status") == "matched" and changes.get("recipient_id"):
+        recipient = activity.snapshot(db, "recipients", str(changes["recipient_id"]))
+        return f"Matched {produce} → {recipient['name'] if recipient else 'a food bank'}"
+    if changes.get("status") == "cancelled":
+        return f"Cancelled {produce}"
+    return f"Edited {produce}"
+
+
 donations = crud_router(
     table="donations", prefix="/donations", label="Donation",
     create_model=DonationIn, update_model=DonationUpdate,
@@ -79,6 +105,9 @@ donations = crud_router(
         "*, farmer:farmers(id, farm_name), recipient:recipients(id, name), "
         "pickups(id, scheduled_at, status, volunteer_id)"
     ),
+    name_of=lambda row: row.get("produce") or "donation",
+    added_word="Logged",
+    describe_update=_describe_donation,
 )
 
 # ---------- pickups ----------
@@ -124,10 +153,17 @@ def get_pickup(pickup_id: UUID, db: Client = Depends(get_db)):
 @pickups.post("", status_code=201)
 def create_pickup(body: PickupIn, db: Client = Depends(get_db)):
     """Schedules a pickup and marks the donation as pickup_scheduled."""
+    donation_before = activity.snapshot(db, "donations", str(body.donation_id))
     pickup = one(run(db.table("pickups").insert(to_row(body))), "Pickup")
-    run(
+    changed = run(
         db.table("donations").update({"status": "pickup_scheduled"})
         .eq("id", str(body.donation_id)).in_("status", ["new", "matched"])
+    )
+    produce = (donation_before or {}).get("produce", "donation")
+    activity.log(
+        db, action="pickups.create", table="pickups", record_id=pickup["id"], kind="insert", row=None,
+        label=f"Scheduled pickup for {produce}",
+        extra=[activity.related("donations", str(body.donation_id), "update", donation_before)] if changed else [],
     )
     return pickup
 
@@ -139,7 +175,12 @@ def update_pickup(pickup_id: UUID, body: PickupUpdate, db: Client = Depends(get_
     changes = to_row(body, partial=True)
     if not changes:
         raise HTTPException(422, "Nothing to update.")
+    pickup_before = activity.snapshot(db, "pickups", str(pickup_id))
+    donation_before = (
+        activity.snapshot(db, "donations", pickup_before["donation_id"]) if pickup_before else None
+    )
     pickup = one(run(db.table("pickups").update(changes).eq("id", str(pickup_id))), "Pickup")
+    _log_pickup_update(db, str(pickup_id), changes, pickup_before, donation_before)
     if changes.get("status") == "completed":
         run(
             db.table("donations")
@@ -164,3 +205,25 @@ def update_pickup(pickup_id: UUID, body: PickupUpdate, db: Client = Depends(get_
 @pickups.delete("/{pickup_id}", status_code=204)
 def delete_pickup(pickup_id: UUID, db: Client = Depends(get_db)):
     one(run(db.table("pickups").delete().eq("id", str(pickup_id))), "Pickup")
+
+
+def _log_pickup_update(db: Client, pickup_id: str, changes: dict, before: Optional[dict], donation: Optional[dict]) -> None:
+    if not before:
+        return
+    produce = (donation or {}).get("produce", "donation")
+    status = changes.get("status")
+    if status == "completed":
+        label = f"Marked {produce} delivered"
+    elif status == "cancelled":
+        label = f"Cancelled pickup for {produce}"
+    elif changes.get("volunteer_id"):
+        volunteer = activity.snapshot(db, "volunteers", str(changes["volunteer_id"]))
+        label = f"Assigned {volunteer['full_name'] if volunteer else 'a volunteer'} to {produce}"
+    elif "volunteer_id" in changes:
+        label = f"Unassigned volunteer from {produce}"
+    else:
+        label = f"Rescheduled pickup for {produce}"
+    # completing or cancelling also changes the donation, so remember it too
+    extra = [activity.related("donations", before["donation_id"], "update", donation)] if status in ("completed", "cancelled") and donation else []
+    activity.log(db, action=f"pickups.{status or 'update'}", table="pickups", record_id=pickup_id,
+                 kind="update", row=before, label=label, extra=extra)

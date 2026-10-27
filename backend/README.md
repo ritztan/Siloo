@@ -23,12 +23,14 @@ backend/
 │   ├── main.py            ← starts the API
 │   ├── config.py          ← reads .env
 │   ├── db.py              ← Supabase connection + error handling
+│   ├── activity.py        ← remembers each change so it can be undone
 │   ├── schemas.py         ← what each request must contain
 │   └── routers/
 │       ├── auth.py        ← /auth/signup, /auth/signin, /auth/me ...
 │       ├── farmer.py      ← /farmer/... (the farmer's own dashboard and donations)
 │       ├── dashboard.py   ← /dashboard (coordinator dashboard)
 │       ├── reports.py     ← /reports (Reports page)
+│       ├── history.py     ← /sidebar, /activity/undo (Undo last action)
 │       ├── resources.py   ← /farmers, /volunteers, /recipients, /donations, /pickups
 │       └── crud.py        ← shared list/get/create/update/delete logic
 ├── supabase/
@@ -131,6 +133,8 @@ Open **http://localhost:5173**. The website talks to the API at `http://127.0.0.
 | PATCH | `/farmer/donations/{id}` | Farmer: edit a donation that isn't matched yet |
 | POST | `/farmer/donations/{id}/cancel` | Farmer: cancel a donation that isn't matched yet |
 | GET | `/dashboard?days=7` | Coordinator: stat cards, priority queue, activity, chart (`days=7` or `30`) |
+| GET | `/sidebar` | Coordinator sidebar: last undoable change + pending-farmers count |
+| POST | `/activity/undo` | Undo your most recent change (approve/reject, match, schedule, assign, deliver, cancel, add/edit/remove) |
 | GET | `/reports?period=30d` | Reports: totals, change vs previous period, chart, where food went, top farms/produce/food banks/volunteers (`7d`, `30d`, `12m`) |
 | GET / POST | `/farmers` | List (`?status=pending`, `?q=name`) / add |
 | POST | `/farmers/{id}/approve`, `/reject`, `/suspend` | Review a farmer account |

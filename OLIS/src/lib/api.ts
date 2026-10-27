@@ -8,6 +8,10 @@ const API_URL =
 
 const SESSION_KEY = "silo-session"
 
+// Browser events: something was saved / an undo happened (pages reload their data)
+export const CHANGED_EVENT = "silo:changed"
+export const UNDO_EVENT = "silo:undo"
+
 // ── Types (match what the backend returns) ────────────────────────────────────
 export type Role = "admin" | "coordinator" | "volunteer" | "farmer"
 export type FarmStatus = "pending" | "approved" | "rejected" | "suspended"
@@ -168,6 +172,10 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
 
   const data = res.status === 204 ? null : await res.json().catch(() => null)
   if (!res.ok) throw new ApiError(messageFrom(data, res.status), res.status, data)
+  // Tell the sidebar something changed (so "Undo last action" stays current)
+  if (init.method && init.method !== "GET" && !path.startsWith("/auth/")) {
+    window.dispatchEvent(new Event(CHANGED_EVENT))
+  }
   return data as T
 }
 

@@ -24,6 +24,8 @@ import {
   type DonationStatus,
   type Farm,
   type FarmStatus,
+  CHANGED_EVENT,
+  UNDO_EVENT,
 } from "./lib/api"
 
 // ── Screens ───────────────────────────────────────────────────────────────────
@@ -102,10 +104,12 @@ function useAutoRefresh(load: () => void, seconds = 30) {
     const timer = window.setInterval(refresh, seconds * 1000)
     window.addEventListener("focus", refresh)
     document.addEventListener("visibilitychange", refresh)
+    window.addEventListener(UNDO_EVENT, load) // an undo may have changed this page's data
     return () => {
       window.clearInterval(timer)
       window.removeEventListener("focus", refresh)
       document.removeEventListener("visibilitychange", refresh)
+      window.removeEventListener(UNDO_EVENT, load)
     }
   }, [load, seconds])
 }
@@ -300,8 +304,51 @@ function AppShell({
   live?: boolean
   nav?: NavItem[]
 }) {
-  const { account, setAccount, pendingFarmers } = useSession()
+  const { account, setAccount, pendingFarmers, setPendingFarmers } = useSession()
   const [menuOpen, setMenuOpen] = useState(false)
+  const isStaff = !!account && account.profile.role !== "farmer"
+  const canUndo = canManageOps(account)
+  const [lastAction, setLastAction] = useState<{ id: number; label: string; created_at: string } | null>(null)
+  const [undoing, setUndoing] = useState(false)
+  const [undoNote, setUndoNote] = useState("")
+
+  // Sidebar: last undoable change + pending farmers badge
+  const loadSidebar = useCallback(() => {
+    if (!isStaff) return
+    api
+      .get<{ last_action: typeof lastAction; farmers_pending: number }>("/sidebar")
+      .then((info) => {
+        setLastAction(info.last_action)
+        setPendingFarmers(info.farmers_pending)
+      })
+      .catch(() => null)
+  }, [isStaff])
+
+  useEffect(loadSidebar, [loadSidebar])
+  useAutoRefresh(loadSidebar)
+  useEffect(() => {
+    const changed = () => {
+      setUndoNote("")
+      loadSidebar()
+    }
+    window.addEventListener(CHANGED_EVENT, changed)
+    return () => window.removeEventListener(CHANGED_EVENT, changed)
+  }, [loadSidebar])
+
+  const undoLast = async () => {
+    if (!lastAction) return
+    setUndoing(true)
+    try {
+      const result = await api.post<{ undone: string; last_action: typeof lastAction }>("/activity/undo")
+      setLastAction(result.last_action)
+      setUndoNote(`Undone: ${result.undone}`)
+      window.dispatchEvent(new Event(UNDO_EVENT))
+    } catch (err) {
+      setUndoNote(errorText(err))
+    } finally {
+      setUndoing(false)
+    }
+  }
   const [jumpQuery, setJumpQuery] = useState("")
   const profile = account?.profile
   // Coordinators added in Supabase may have no name yet: fall back to their email
@@ -373,10 +420,22 @@ function AppShell({
 
         {/* ── Sidebar footer ───────────────────────────────────────────── */}
         <div className="side-bottom">
-          {profile?.role !== "farmer" && (
+          {canUndo && (
             <div className="undo-card">
               <strong>Undo last action</strong>
-              <span>Nothing to undo.</span>
+              {lastAction ? (
+                <>
+                  <span title={lastAction.label}>
+                    {lastAction.label} · {formatTime(lastAction.created_at)}
+                  </span>
+                  <button type="button" onClick={undoLast} disabled={undoing}>
+                    {undoing ? "Undoing..." : "Undo"}
+                  </button>
+                </>
+              ) : (
+                <span>Nothing to undo.</span>
+              )}
+              {undoNote && <small className="undo-note">{undoNote}</small>}
             </div>
           )}
 

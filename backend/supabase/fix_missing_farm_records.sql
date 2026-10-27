@@ -6,6 +6,9 @@
 -- Run AFTER that migration. Safe to run more than once.
 -- =====================================================================
 
+-- 0. Remove an outdated role rule left over from older tables (if present)
+alter table public.profiles drop constraint if exists profiles_role_check1;
+
 -- 1. Create the missing farm records from what they typed when signing up
 insert into public.farmers (profile_id, farm_name, contact_name, email, phone, location, cooperative, status)
 select

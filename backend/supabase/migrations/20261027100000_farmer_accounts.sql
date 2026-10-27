@@ -11,6 +11,8 @@
 
 -- ---------- profiles: add farmer role + phone ----------
 alter table public.profiles drop constraint if exists profiles_role_check;
+-- (projects that ran move_old_tables.sql have the rule under this name)
+alter table public.profiles drop constraint if exists profiles_role_check1;
 alter table public.profiles add constraint profiles_role_check
   check (role in ('admin', 'coordinator', 'volunteer', 'farmer'));
 alter table public.profiles alter column role set default 'farmer';
@@ -24,6 +26,7 @@ alter table public.farmers add column if not exists profile_id uuid unique
   references public.profiles (id) on delete set null;
 alter table public.farmers add column if not exists cooperative text;
 alter table public.farmers drop constraint if exists farmers_status_check;
+alter table public.farmers drop constraint if exists farmers_status_check1;
 alter table public.farmers add constraint farmers_status_check
   check (status in ('pending', 'approved', 'rejected', 'suspended'));
 

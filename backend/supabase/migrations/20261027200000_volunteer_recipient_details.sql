@@ -25,9 +25,11 @@ alter table public.recipients add column if not exists capacity text;   -- e.g. 
 alter table public.recipients add column if not exists needs text;      -- e.g. 'Fruit, vegetables'
 alter table public.recipients add column if not exists status text not null default 'open';
 alter table public.recipients drop constraint if exists recipients_status_check;
+alter table public.recipients drop constraint if exists recipients_status_check1;
 alter table public.recipients add constraint recipients_status_check
   check (status in ('open', 'limited', 'closed'));
 alter table public.recipients drop constraint if exists recipients_type_check;
+alter table public.recipients drop constraint if exists recipients_type_check1;
 alter table public.recipients add constraint recipients_type_check
   check (type in ('food_bank', 'kitchen', 'pantry', 'shelter', 'rescue_partner', 'other'));
 

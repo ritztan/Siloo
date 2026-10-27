@@ -10,16 +10,24 @@ from pydantic import BaseModel, EmailStr, Field
 # ---------- auth ----------
 
 class SignUp(BaseModel):
+    """Public sign-up is for farmers. The account starts as pending review."""
     email: EmailStr
     password: str = Field(min_length=6)
-    first_name: str = Field(min_length=1)
-    last_name: str = Field(min_length=1)
-    organization: str = Field(min_length=1)
+    full_name: str = Field(min_length=1)
+    phone: str = Field(min_length=7)
+    farm_name: str = Field(min_length=1)
+    farm_address: str = Field(min_length=1)
+    cooperative: Optional[str] = None
+
+
+LoginRole = Literal["farmer", "coordinator"]
 
 
 class SignIn(BaseModel):
     email: EmailStr
     password: str
+    # Which login card was used. Farmers can't use the coordinator login and vice versa.
+    role: Optional[LoginRole] = None
 
 
 class Refresh(BaseModel):
@@ -34,7 +42,7 @@ class ProfileUpdate(BaseModel):
 
 # ---------- farmers ----------
 
-FarmerStatus = Literal["pending", "approved", "rejected"]
+FarmerStatus = Literal["pending", "approved", "rejected", "suspended"]
 
 
 class FarmerIn(BaseModel):
@@ -109,6 +117,21 @@ class DonationUpdate(BaseModel):
     quantity_kg: Optional[Decimal] = Field(default=None, gt=0)
     recipient_id: Optional[UUID] = None
     status: Optional[DonationStatus] = None
+    expires_at: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
+class FarmerDonationIn(BaseModel):
+    """A donation posted by a farmer for their own farm."""
+    produce: str = Field(min_length=1)
+    quantity_kg: Decimal = Field(gt=0)
+    expires_at: Optional[datetime] = None
+    notes: Optional[str] = None
+
+
+class FarmerDonationUpdate(BaseModel):
+    produce: Optional[str] = None
+    quantity_kg: Optional[Decimal] = Field(default=None, gt=0)
     expires_at: Optional[datetime] = None
     notes: Optional[str] = None
 

@@ -29,3 +29,9 @@ CORS_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+# localhost and 127.0.0.1 are the same computer; allow both spellings
+CORS_ORIGINS += [
+    o.replace("localhost", "127.0.0.1") if "localhost" in o else o.replace("127.0.0.1", "localhost")
+    for o in CORS_ORIGINS
+]
+CORS_ORIGINS = sorted(set(CORS_ORIGINS))

@@ -5,8 +5,17 @@ Website (OLIS)  ──►  Python API (FastAPI)  ──►  Supabase (database +
 ```
 
 - **Supabase** stores the data and handles accounts.
-- **The Python API** (this folder) is what the website calls: sign up, sign in, dashboard numbers, donations, pickups, etc.
+- **The Python API** (this folder) is what the website calls: sign up, log in, dashboards, donations, pickups, etc.
 - Every request runs **as the signed-in user**, so the security rules in the database decide what they can see and change. The backend never uses the secret `service_role` key.
+
+## Who can do what
+
+| Account | How it's created | What they can do |
+|---|---|---|
+| **Farmer** | Signs up on the website ("Create farmer account") | Starts as **pending**. Once a coordinator approves them: post surplus harvest, see where their donations go. Sees only their own farm. |
+| **Coordinator** | Created by you in Supabase (no public sign-up, see below) | Sees everything, approves/suspends farmers, manages donations, pickups, volunteers, recipients. |
+| **Admin** | Same as coordinator, plus can change other people's roles | |
+| **Volunteer** | Created in Supabase like a coordinator | View only (uses the coordinator login). |
 
 ```
 backend/
@@ -17,12 +26,16 @@ backend/
 │   ├── schemas.py         ← what each request must contain
 │   └── routers/
 │       ├── auth.py        ← /auth/signup, /auth/signin, /auth/me ...
-│       ├── dashboard.py   ← /dashboard (everything the Dashboard page shows)
+│       ├── farmer.py      ← /farmer/... (the farmer's own dashboard and donations)
+│       ├── dashboard.py   ← /dashboard (coordinator dashboard)
 │       ├── resources.py   ← /farmers, /volunteers, /recipients, /donations, /pickups
 │       └── crud.py        ← shared list/get/create/update/delete logic
 ├── supabase/
-│   ├── migrations/...init_schema.sql   ← tables, security rules, views
-│   └── seed.sql                        ← sample data
+│   ├── migrations/
+│   │   ├── 20261027000000_init_schema.sql      ← tables, security rules, views
+│   │   └── 20261027100000_farmer_accounts.sql  ← farmer sign-up + farmer-only rules
+│   ├── move_old_tables.sql   ← only if the project already had older Silo tables
+│   └── seed.sql              ← sample data
 ├── tests/test_smoke.py
 ├── requirements.txt
 └── .env.example
@@ -32,10 +45,27 @@ backend/
 
 Our project: `https://nnpxgjnthmyknphjxhwu.supabase.co`
 
-1. Open the project at [supabase.com/dashboard](https://supabase.com/dashboard) → **SQL Editor** → **New query**.
-2. Paste everything from `supabase/migrations/20261027000000_init_schema.sql` and click **Run**.
-3. (Optional) New query → paste `supabase/seed.sql` → **Run** for sample data.
-4. For easy testing, go to **Authentication → Sign In / Providers → Email** and turn off **Confirm email**. Otherwise new accounts must click a link in their email before signing in.
+In Supabase → **SQL Editor**, run each file in its own **New query**, in this order:
+
+1. `supabase/migrations/20261027000000_init_schema.sql`
+2. `supabase/migrations/20261027100000_farmer_accounts.sql`
+3. (Optional) `supabase/seed.sql` for sample data
+
+Then go to **Authentication → Sign In / Providers → Email** and turn off **Confirm email** while testing. Otherwise new accounts must click a link in their email before they can log in.
+
+### Create a coordinator account
+1. Supabase → **Authentication → Users → Add user → Create new user**. Enter an email and password, tick **Auto Confirm User**.
+2. In the **SQL Editor**, give them the role and a name:
+
+```sql
+update public.profiles
+set role = 'admin',            -- or 'coordinator' / 'volunteer'
+    first_name = 'Carla',
+    last_name  = 'Mendoza'
+where id = (select id from auth.users where email = 'carla@example.com');
+```
+
+Now they can use the **Coordinator login** on the website.
 
 ## 2. Run the Python API
 
@@ -43,12 +73,12 @@ You need Python 3.9 or newer (the one built into macOS works).
 
 ```bash
 cd backend
-python -m venv .venv
+python3 -m venv .venv
 
-# Windows
-.venv\Scripts\activate
 # Mac / Linux
 source .venv/bin/activate
+# Windows
+.venv\Scripts\activate
 
 pip install -r requirements.txt
 ```
@@ -60,42 +90,46 @@ SUPABASE_URL=https://nnpxgjnthmyknphjxhwu.supabase.co
 SUPABASE_ANON_KEY=paste-it-here
 ```
 
-> Never use the `service_role` / secret key. `.env` is already ignored by Git, so it won't be uploaded.
+> Never use the `service_role` / secret key. `.env` is ignored by Git, so it won't be uploaded.
 
-Start it:
+Start it (every new terminal needs `source .venv/bin/activate` first):
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --reload-dir app
 ```
 
-Open **http://127.0.0.1:8000/docs**. You'll see every endpoint and can try them right in the browser:
+Check it at **http://127.0.0.1:8000/docs**. You can try every endpoint there: log in with `POST /auth/signin`, copy the `access_token`, click **Authorize**, paste it.
 
-1. `POST /auth/signup` → create an account
-2. `POST /auth/signin` → copy the `access_token`
-3. Click **Authorize** (top right), paste the token, then try `GET /dashboard`
+## 3. Run the website
 
-### Make yourself admin
-After signing up once, run this in the Supabase SQL Editor:
+In a second terminal:
 
-```sql
-update public.profiles set role = 'admin'
-where id = (select id from auth.users where email = 'you@example.com');
+```bash
+cd OLIS
+npm install
+npm run dev
 ```
 
-Roles: `admin` and `coordinator` can add/edit/delete. `volunteer` can only view. New accounts are coordinators.
+Open **http://localhost:5173**. The website talks to the API at `http://127.0.0.1:8000`. To use a different address, create `OLIS/.env` with `VITE_API_URL=...`. If the website runs somewhere other than port 5173 or 8443, add it to `CORS_ORIGINS` in `backend/.env`.
+
+**What's connected so far:** farmer sign-up, both logins, the farmer status page and farmer dashboard, the coordinator Dashboard, and the Farmers page (approve / reject / suspend). Pages that still show sample data say so in the top bar.
 
 ## Endpoints
 
 | Method | Path | What it does |
 |---|---|---|
-| POST | `/auth/signup` | Create account (`email`, `password`, `first_name`, `last_name`, `organization`) |
-| POST | `/auth/signin` | Returns `access_token` + `refresh_token` |
+| POST | `/auth/signup` | Farmer sign-up (`email`, `password`, `full_name`, `phone`, `farm_name`, `farm_address`, `cooperative`) |
+| POST | `/auth/signin` | Log in. Send `role: "farmer"` or `"coordinator"` to match the login card |
 | POST | `/auth/refresh` | New access token (they expire after ~1 hour) |
 | POST | `/auth/signout` | Sign out this device |
-| GET / PATCH | `/auth/me` | Your profile |
-| GET | `/dashboard?days=7` | Stat cards, priority queue, recent activity, chart data (`days=7` or `30`) |
+| GET / PATCH | `/auth/me` | Your profile, and your farm + status if you're a farmer |
+| GET | `/farmer/dashboard` | Farmer: your farm, totals, and your donations |
+| POST | `/farmer/donations` | Farmer: post surplus (approved farmers only) |
+| PATCH | `/farmer/donations/{id}` | Farmer: edit a donation that isn't matched yet |
+| POST | `/farmer/donations/{id}/cancel` | Farmer: cancel a donation that isn't matched yet |
+| GET | `/dashboard?days=7` | Coordinator: stat cards, priority queue, activity, chart (`days=7` or `30`) |
 | GET / POST | `/farmers` | List (`?status=pending`, `?q=name`) / add |
-| POST | `/farmers/{id}/approve`, `/reject` | Review a farmer application |
+| POST | `/farmers/{id}/approve`, `/reject`, `/suspend` | Review a farmer account |
 | GET / POST | `/donations` | List (`?status=new`) / log a donation |
 | GET / POST | `/pickups` | List (`?day=today`, `?unassigned=true`) / schedule |
 | PATCH | `/pickups/{id}` | Assign a volunteer or set `status: "completed"` (marks the donation delivered) |
@@ -103,44 +137,6 @@ Roles: `admin` and `coordinator` can add/edit/delete. `volunteer` can only view.
 | GET / PATCH / DELETE | `/{table}/{id}` | View, edit, or delete one item |
 
 Every endpoint except signup/signin/refresh needs the header `Authorization: Bearer <access_token>`.
-
-## 3. Call it from the website
-
-Add to `OLIS/.env`:
-
-```
-VITE_API_URL=http://127.0.0.1:8000
-```
-
-Example (`OLIS/src/lib/api.ts`):
-
-```ts
-const API = import.meta.env.VITE_API_URL
-
-export async function api(path: string, options: RequestInit = {}) {
-  const token = localStorage.getItem('silo-token')
-  const res = await fetch(`${API}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
-  })
-  const data = res.status === 204 ? null : await res.json()
-  if (!res.ok) throw new Error(data?.detail?.message ?? data?.detail ?? 'Request failed')
-  return data
-}
-
-// Sign in
-const session = await api('/auth/signin', { method: 'POST', body: JSON.stringify({ email, password }) })
-localStorage.setItem('silo-token', session.access_token)
-
-// Dashboard
-const dashboard = await api('/dashboard')
-```
-
-If the website runs on a different address than `localhost:5173` or `localhost:8443`, add it to `CORS_ORIGINS` in `backend/.env`.
 
 ## Tests
 

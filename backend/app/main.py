@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import config
-from .routers import auth, dashboard, resources
+from .routers import auth, dashboard, farmer, resources
 
 app = FastAPI(
     title="Silo API",
@@ -28,6 +28,7 @@ def health():
 
 app.include_router(auth.router)
 app.include_router(dashboard.router)
+app.include_router(farmer.router)
 app.include_router(resources.farmers)
 app.include_router(resources.volunteers)
 app.include_router(resources.recipients)

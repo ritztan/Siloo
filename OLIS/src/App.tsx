@@ -1,9 +1,52 @@
-import { useState, useEffect, type FormEvent, type ReactNode } from "react"
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react"
+import {
+  api,
+  ApiError,
+  formatDateTime,
+  formatJoined,
+  formatKg,
+  formatTime,
+  getTokens,
+  initials,
+  isToday,
+  loadAccount,
+  signIn,
+  signOut,
+  type Account,
+  type DonationStatus,
+  type Farm,
+  type FarmStatus,
+} from "./lib/api"
 
 // ── Screens ───────────────────────────────────────────────────────────────────
 // Every screen in the app. Each one has its own component below, so you can
 // open that function and edit it on its own.
-type Screen = "splash" | "signin" | "signup" | "dashboard" | "donations" | "pickups" | "farmers" | "volunteers" | "recipients" | "reports"
+type Screen =
+  | "splash"
+  | "signin"
+  | "signup"
+  | "dashboard"
+  | "donations"
+  | "pickups"
+  | "farmers"
+  | "volunteers"
+  | "recipients"
+  | "reports"
+  | "farmer-status"
+  | "farmer-dashboard"
+
+// Screens anyone can open without logging in
+const PUBLIC_SCREENS: Screen[] = ["splash", "signin", "signup"]
+// Screens for farmer accounts
+const FARMER_SCREENS: Screen[] = ["farmer-status", "farmer-dashboard"]
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type IconName = "grid" | "gift" | "truck" | "shield" | "users" | "home" | "chart" | "menu" | "close" | "arrow" | "clock" | "leaf" | "search" | "mail" | "lock" | "eye"
@@ -18,16 +61,42 @@ type NavItem = {
 
 type ActivityTone = "amber" | "green" | "blue" | "dark"
 
-type ActivityItem = {
-  title: string
-  farm: string
-  partner: string
-  status: string
-  tone: ActivityTone
+// ── Signed-in account ─────────────────────────────────────────────────────────
+// Shared with every screen so they know who is logged in.
+type Session = {
+  account: Account | null
+  setAccount: (account: Account | null) => void
+  pendingFarmers: number | null
+  setPendingFarmers: (count: number) => void
 }
 
-// ── Storage keys ──────────────────────────────────────────────────────────────
-const SESSION_KEY = "silo-demo-session"
+const SessionContext = createContext<Session>({
+  account: null,
+  setAccount: () => {},
+  pendingFarmers: null,
+  setPendingFarmers: () => {},
+})
+
+const useSession = () => useContext(SessionContext)
+
+// Where an account lands after logging in
+function homeFor(account: Account): Screen {
+  if (account.profile.role !== "farmer") return "dashboard"
+  return account.farmer?.status === "approved" ? "farmer-dashboard" : "farmer-status"
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  admin: "Coordinator · Admin",
+  coordinator: "Coordinator",
+  volunteer: "Volunteer · View only",
+  farmer: "Farmer",
+}
+
+function errorText(error: unknown) {
+  return error instanceof ApiError || error instanceof Error
+    ? error.message
+    : "Something went wrong. Please try again."
+}
 
 // ── Icon ──────────────────────────────────────────────────────────────────────
 const ICON_PATHS: Record<IconName, ReactNode> = {
@@ -158,7 +227,6 @@ const NAV_ITEMS: NavItem[] = [
     label: "Farmers",
     icon: "shield",
     group: "Community",
-    count: 3,
   },
   {
     screen: "volunteers",
@@ -178,38 +246,16 @@ const NAV_ITEMS: NavItem[] = [
   },
 ]
 
-// ── Sample data ───────────────────────────────────────────────────────────────
-const ACTIVITY: ActivityItem[] = [
+const FARMER_NAV: NavItem[] = [
   {
-    title: "Peaches · 40 kg",
-    farm: "Navarro Family Farm",
-    partner: "Hope Kitchen",
-    status: "Pickup today",
-    tone: "amber",
-  },
-  {
-    title: "Sweet potatoes · 28 kg",
-    farm: "Aquino Highland Greens",
-    partner: "Food Bank 1",
-    status: "Matched",
-    tone: "green",
-  },
-  {
-    title: "Tomatoes · 16 kg",
-    farm: "Santos Organic Farm",
-    partner: "City Pantry",
-    status: "New",
-    tone: "blue",
-  },
-  {
-    title: "Leafy greens · 22 kg",
-    farm: "Riverside Organics",
-    partner: "Second Harvest",
-    status: "Delivered",
-    tone: "dark",
+    screen: "farmer-dashboard",
+    label: "My donations",
+    icon: "leaf",
+    group: "My farm",
   },
 ]
 
+// ── Sample data ───────────────────────────────────────────────────────────────
 const RANGES = ["7 days", "30 days"]
 
 const VOLUME_BARS = [35, 52, 44, 70, 61, 86, 76, 58, 91, 67, 80, 96]
@@ -222,20 +268,35 @@ const CHART_DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 
 // ── App shell (sidebar + top bar) ─────────────────────────────────────────────
 // Wraps every screen after sign-in. Pass the screen's own content as children.
+// live = this screen shows real data from Supabase (otherwise it's still sample data).
 function AppShell({
   go,
   active,
   title,
   children,
+  live = false,
+  nav = NAV_ITEMS,
 }: {
   go: (s: Screen) => void
   active: Screen
   title: string
   children: ReactNode
+  live?: boolean
+  nav?: NavItem[]
 }) {
+  const { account, setAccount, pendingFarmers } = useSession()
   const [menuOpen, setMenuOpen] = useState(false)
   const [jumpQuery, setJumpQuery] = useState("")
-  const matchingPages = NAV_ITEMS.filter((item) =>
+  const profile = account?.profile
+  // Coordinators added in Supabase may have no name yet: fall back to their email
+  const fullName =
+    (profile && `${profile.first_name} ${profile.last_name}`.trim()) ||
+    account?.email?.split("@")[0] ||
+    "Silo user"
+  const navItems = nav.map((item) =>
+    item.screen === "farmers" && pendingFarmers ? { ...item, count: pendingFarmers } : item,
+  )
+  const matchingPages = navItems.filter((item) =>
     item.label.toLowerCase().includes(jumpQuery.trim().toLowerCase()),
   )
 
@@ -244,8 +305,9 @@ function AppShell({
     go(next)
   }
 
-  const handleSignOut = () => {
-    localStorage.removeItem(SESSION_KEY)
+  const handleSignOut = async () => {
+    await signOut()
+    setAccount(null)
     go("signin")
   }
 
@@ -273,7 +335,7 @@ function AppShell({
 
         {/* ── Navigation menu ──────────────────────────────────────────── */}
         <nav className="side-nav" aria-label="Coordinator navigation">
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <div key={item.label} className="nav-entry">
               {item.group && <span className="nav-label">{item.group}</span>}
 
@@ -295,17 +357,19 @@ function AppShell({
 
         {/* ── Sidebar footer ───────────────────────────────────────────── */}
         <div className="side-bottom">
-          <div className="undo-card">
-            <strong>Undo last action</strong>
-            <span>Nothing to undo.</span>
-          </div>
+          {profile?.role !== "farmer" && (
+            <div className="undo-card">
+              <strong>Undo last action</strong>
+              <span>Nothing to undo.</span>
+            </div>
+          )}
 
           <div className="account-card">
-            <span className="avatar">CM</span>
+            <span className="avatar">{initials(fullName)}</span>
 
             <div>
-              <strong>Carla Men...</strong>
-              <small>Coordinator · Admin</small>
+              <strong title={fullName}>{fullName}</strong>
+              <small>{ROLE_LABELS[profile?.role ?? ""] ?? ""}</small>
             </div>
 
             <button type="button" onClick={handleSignOut}>
@@ -373,14 +437,19 @@ function AppShell({
             )}
           </div>
 
-          <div className="demo-status">
-            <i></i> Demo mode · saved in this browser
+          <div className={`demo-status ${live ? "live" : ""}`}>
+            <i></i>{" "}
+            {live ? "Live data · Supabase" : "Sample data · not connected yet"}
           </div>
         </header>
 
         {children}
 
-        <div className="sample-bar">Sample data loaded</div>
+        {!live && (
+          <div className="sample-bar">
+            Sample data · this page isn't connected to the database yet
+          </div>
+        )}
       </div>
     </div>
   )
@@ -422,13 +491,23 @@ function AuthLayout({
 
 // ── Splash Screen ─────────────────────────────────────────────────────────────
 function SplashScreen({ go }: { go: (s: Screen) => void }) {
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const hasSession = localStorage.getItem(SESSION_KEY) === "active"
-      go(hasSession ? "dashboard" : "signin")
-    }, 1700)
+  const { setAccount } = useSession()
 
-    return () => window.clearTimeout(timer)
+  useEffect(() => {
+    let cancelled = false
+    const minimumWait = new Promise((resolve) => window.setTimeout(resolve, 1700))
+    // Still logged in from last time? Load the account while the splash plays.
+    const restore = getTokens() ? loadAccount().catch(() => null) : Promise.resolve(null)
+
+    Promise.all([restore, minimumWait]).then(([account]) => {
+      if (cancelled) return
+      setAccount(account)
+      go(account ? homeFor(account) : "signin")
+    })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   return (
@@ -456,11 +535,31 @@ function SplashScreen({ go }: { go: (s: Screen) => void }) {
 
 // ── Sign In Screen ────────────────────────────────────────────────────────────
 function SignInScreen({ go }: { go: (s: Screen) => void }) {
+  const { setAccount } = useSession()
   const [resetMessage, setResetMessage] = useState("")
-  const submit = (event: FormEvent) => {
+  const [farmerEmail, setFarmerEmail] = useState("")
+  const [farmerPassword, setFarmerPassword] = useState("")
+  const [coordEmail, setCoordEmail] = useState("")
+  const [coordPassword, setCoordPassword] = useState("")
+  const [busy, setBusy] = useState<"farmer" | "coordinator" | null>(null)
+  const [error, setError] = useState<{ role: "farmer" | "coordinator"; text: string } | null>(null)
+
+  const submit = (role: "farmer" | "coordinator") => async (event: FormEvent) => {
     event.preventDefault()
-    localStorage.setItem(SESSION_KEY, "active")
-    go("dashboard")
+    setError(null)
+    setBusy(role)
+    try {
+      const account =
+        role === "farmer"
+          ? await signIn(farmerEmail.trim(), farmerPassword, "farmer")
+          : await signIn(coordEmail.trim(), coordPassword, "coordinator")
+      setAccount(account)
+      go(homeFor(account))
+    } catch (err) {
+      setError({ role, text: errorText(err) })
+    } finally {
+      setBusy(null)
+    }
   }
 
   return (
@@ -496,14 +595,16 @@ function SignInScreen({ go }: { go: (s: Screen) => void }) {
               <h2>Farmer login</h2>
               <span className="role-tag">Donor</span>
             </div>
-            <form onSubmit={submit}>
+            <form onSubmit={submit("farmer")}>
               <label>
-                <span>Mobile number or email</span>
+                <span>Email</span>
                 <input
                   required
-                  type="text"
+                  type="email"
                   autoComplete="username"
-                  placeholder="09XX XXX XXXX"
+                  placeholder="you@example.com"
+                  value={farmerEmail}
+                  onChange={(event) => setFarmerEmail(event.target.value)}
                 />
               </label>
               <label>
@@ -514,18 +615,25 @@ function SignInScreen({ go }: { go: (s: Screen) => void }) {
                   type="password"
                   autoComplete="current-password"
                   placeholder="Enter your password"
+                  value={farmerPassword}
+                  onChange={(event) => setFarmerPassword(event.target.value)}
                 />
               </label>
-              <button type="submit" className="auth-submit">
-                Log in as farmer
+              <button type="submit" className="auth-submit" disabled={busy !== null}>
+                {busy === "farmer" ? "Logging in..." : "Log in as farmer"}
               </button>
+              {error?.role === "farmer" && (
+                <p className="auth-feedback auth-error" role="alert">
+                  {error.text}
+                </p>
+              )}
             </form>
             <button
               type="button"
               className="text-link"
               onClick={() =>
                 setResetMessage(
-                  "Password reset is not available in this demo. Contact your coordinator for help.",
+                  "Password reset isn't set up yet. Contact your coordinator for help.",
                 )
               }
             >
@@ -557,14 +665,16 @@ function SignInScreen({ go }: { go: (s: Screen) => void }) {
               <h2>Coordinator login</h2>
               <span className="role-tag admin-tag">Admin</span>
             </div>
-            <form onSubmit={submit}>
+            <form onSubmit={submit("coordinator")}>
               <label>
-                <span>Username</span>
+                <span>Email</span>
                 <input
                   required
-                  type="text"
+                  type="email"
                   autoComplete="username"
-                  placeholder="coordinator"
+                  placeholder="coordinator@organization.org"
+                  value={coordEmail}
+                  onChange={(event) => setCoordEmail(event.target.value)}
                 />
               </label>
               <label>
@@ -575,11 +685,18 @@ function SignInScreen({ go }: { go: (s: Screen) => void }) {
                   type="password"
                   autoComplete="current-password"
                   placeholder="Enter your password"
+                  value={coordPassword}
+                  onChange={(event) => setCoordPassword(event.target.value)}
                 />
               </label>
-              <button type="submit" className="auth-submit">
-                Log in as coordinator
+              <button type="submit" className="auth-submit" disabled={busy !== null}>
+                {busy === "coordinator" ? "Logging in..." : "Log in as coordinator"}
               </button>
+              {error?.role === "coordinator" && (
+                <p className="auth-feedback auth-error" role="alert">
+                  {error.text}
+                </p>
+              )}
             </form>
             <p className="login-help">
               Coordinator accounts are set up by the operating office (barangay,
@@ -597,9 +714,26 @@ function SignInScreen({ go }: { go: (s: Screen) => void }) {
 function SignUpScreen({ go }: { go: (s: Screen) => void }) {
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+  const [form, setForm] = useState({
+    full_name: "",
+    phone: "",
+    email: "",
+    cooperative: "",
+    farm_name: "",
+    farm_address: "",
+  })
   const [submitted, setSubmitted] = useState(false)
+  const [needsConfirmation, setNeedsConfirmation] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const field = (name: keyof typeof form) => ({
+    value: form[name],
+    onChange: (event: { target: { value: string } }) =>
+      setForm((current) => ({ ...current, [name]: event.target.value })),
+  })
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (password !== confirmPassword) {
       const confirmInput =
@@ -610,7 +744,21 @@ function SignUpScreen({ go }: { go: (s: Screen) => void }) {
       }
       return
     }
-    setSubmitted(true)
+    setError("")
+    setBusy(true)
+    try {
+      const result = await api.post<{ needs_email_confirmation: boolean }>("/auth/signup", {
+        ...form,
+        email: form.email.trim(),
+        password,
+      })
+      setNeedsConfirmation(result.needs_email_confirmation)
+      setSubmitted(true)
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -623,9 +771,11 @@ function SignUpScreen({ go }: { go: (s: Screen) => void }) {
           <p className="auth-eyebrow">Application received</p>
           <h1>Your account is pending review.</h1>
           <p>
-            This demo does not send your application to a coordinator. In the
-            live service, the coordinator will verify your details before you
-            can post donations.
+            {needsConfirmation
+              ? "First, confirm your email using the link we just sent you. "
+              : ""}
+            A coordinator will verify your details before you can post
+            donations. You can log in any time to check your status.
           </p>
           <button
             type="button"
@@ -666,28 +816,33 @@ function SignUpScreen({ go }: { go: (s: Screen) => void }) {
                     required
                     autoComplete="name"
                     placeholder="Your full name"
+                    {...field("full_name")}
                   />
                 </label>
                 <label>
                   <span>Mobile number</span>
                   <input
                     required
+                    minLength={7}
                     type="tel"
                     autoComplete="tel"
                     placeholder="09XX XXX XXXX"
+                    {...field("phone")}
                   />
                 </label>
                 <label>
-                  <span>Email (optional)</span>
+                  <span>Email (used to log in)</span>
                   <input
+                    required
                     type="email"
                     autoComplete="email"
                     placeholder="you@example.com"
+                    {...field("email")}
                   />
                 </label>
                 <label>
                   <span>Cooperative / association (optional)</span>
-                  <input placeholder="Association name" />
+                  <input placeholder="Association name" {...field("cooperative")} />
                 </label>
               </div>
             </fieldset>
@@ -697,7 +852,11 @@ function SignUpScreen({ go }: { go: (s: Screen) => void }) {
               <div className="signup-fields">
                 <label>
                   <span>Farm name</span>
-                  <input required placeholder="Your farm or garden name" />
+                  <input
+                    required
+                    placeholder="Your farm or garden name"
+                    {...field("farm_name")}
+                  />
                 </label>
                 <label>
                   <span>Farm address</span>
@@ -705,6 +864,7 @@ function SignUpScreen({ go }: { go: (s: Screen) => void }) {
                     required
                     autoComplete="street-address"
                     placeholder="Street, barangay, municipality / city"
+                    {...field("farm_address")}
                   />
                 </label>
               </div>
@@ -779,10 +939,15 @@ function SignUpScreen({ go }: { go: (s: Screen) => void }) {
               >
                 Cancel
               </button>
-              <button type="submit" className="auth-submit">
-                Submit for approval
+              <button type="submit" className="auth-submit" disabled={busy}>
+                {busy ? "Submitting..." : "Submit for approval"}
               </button>
             </div>
+            {error && (
+              <p className="auth-feedback auth-error" role="alert">
+                {error}
+              </p>
+            )}
           </form>
         </section>
       )}
@@ -790,19 +955,105 @@ function SignUpScreen({ go }: { go: (s: Screen) => void }) {
   )
 }
 
-// ── Dashboard Screen ──────────────────────────────────────────────────────────
+// ── Donation status labels ────────────────────────────────────────────────────
+function donationStatus(
+  status: DonationStatus,
+  nextPickupAt?: string | null,
+): { label: string; tone: ActivityTone } {
+  switch (status) {
+    case "new":
+      return { label: "New", tone: "blue" }
+    case "matched":
+      return { label: "Matched", tone: "green" }
+    case "pickup_scheduled":
+      return {
+        label: nextPickupAt && isToday(nextPickupAt) ? "Pickup today" : "Pickup scheduled",
+        tone: "amber",
+      }
+    case "delivered":
+      return { label: "Delivered", tone: "dark" }
+    case "expired":
+      return { label: "Expired", tone: "amber" }
+    default:
+      return { label: "Cancelled", tone: "dark" }
+  }
+}
+
+type DashboardData = {
+  stats: {
+    active_donations: number
+    donations_today: number
+    pickups_today: number
+    next_pickup_at: string | null
+    farmers_pending: number
+    food_rescued_kg: number | string
+    delivered_donations: number
+  }
+  priority_queue: { type: string; count: number; title: string; detail: string }[]
+  priority_total: number
+  activity: {
+    id: string
+    produce: string
+    quantity_kg: number | string
+    status: DonationStatus
+    farm_name: string
+    recipient_name: string | null
+    next_pickup_at: string | null
+  }[]
+  rescue_volume: { day: string; kg_rescued: number }[]
+}
+
+const QUEUE_LOOK: Record<string, { icon: IconName; className: string; screen: Screen }> = {
+  farmers_pending: { icon: "shield", className: "", screen: "farmers" },
+  pickups_unassigned: { icon: "clock", className: "amber-bg", screen: "pickups" },
+  donations_expiring: { icon: "gift", className: "blue-bg", screen: "donations" },
+}
+
+function greeting() {
+  const hour = new Date().getHours()
+  return hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
+}
+
+// ── Dashboard Screen (coordinators) ───────────────────────────────────────────
 function DashboardScreen({ go }: { go: (s: Screen) => void }) {
+  const { account, setPendingFarmers } = useSession()
   const [range, setRange] = useState("7 days")
+  const [data, setData] = useState<DashboardData | null>(null)
+  const [error, setError] = useState("")
+
+  const load = useCallback(() => {
+    setError("")
+    api
+      .get<DashboardData>(`/dashboard?days=${range === "7 days" ? 7 : 30}`)
+      .then((result) => {
+        setData(result)
+        setPendingFarmers(result.stats.farmers_pending)
+      })
+      .catch((err) => setError(errorText(err)))
+  }, [range])
+
+  useEffect(load, [load])
+
+  const stats = data?.stats
+  const show = (value: number | string | undefined) => (value === undefined ? "…" : value)
+  const volume = data?.rescue_volume ?? []
+  const maxKg = Math.max(0, ...volume.map((day) => day.kg_rescued))
+  const labelEvery = volume.length > 7 ? Math.ceil(volume.length / 7) : 1
+  const firstName = account?.profile.first_name
 
   return (
-    <AppShell go={go} active="dashboard" title="Dashboard">
+    <AppShell go={go} active="dashboard" title="Dashboard" live>
       <main className="dashboard-main">
         {/* ── Page heading ───────────────────────────────────────────────── */}
         <section className="page-heading">
           <div>
             <p className="eyebrow">Operations overview</p>
             <h1>Dashboard</h1>
-            <p>Good morning, Carla. Here’s what needs your attention today.</p>
+            <p>
+              {greeting()}
+              {firstName ? `, ${firstName}` : ""}. Here’s what needs your attention
+              today.
+            </p>
           </div>
 
           <button
@@ -814,6 +1065,15 @@ function DashboardScreen({ go }: { go: (s: Screen) => void }) {
           </button>
         </section>
 
+        {error && (
+          <div className="load-error" role="alert">
+            <span>{error}</span>
+            <button type="button" className="quiet-action" onClick={load}>
+              Try again
+            </button>
+          </div>
+        )}
+
         {/* ── Key metrics ────────────────────────────────────────────────── */}
         <section className="stats-grid" aria-label="Key metrics">
           <article>
@@ -821,8 +1081,10 @@ function DashboardScreen({ go }: { go: (s: Screen) => void }) {
               <Icon name="gift" />
             </div>
             <p>Active donations</p>
-            <strong>12</strong>
-            <span className="positive">+3 today</span>
+            <strong>{show(stats?.active_donations)}</strong>
+            <span className="positive">
+              {stats ? `+${stats.donations_today} today` : ""}
+            </span>
           </article>
 
           <article>
@@ -830,8 +1092,14 @@ function DashboardScreen({ go }: { go: (s: Screen) => void }) {
               <Icon name="truck" />
             </div>
             <p>Pickups today</p>
-            <strong>4</strong>
-            <span>Next at 10:30 AM</span>
+            <strong>{show(stats?.pickups_today)}</strong>
+            <span>
+              {stats?.next_pickup_at
+                ? `Next at ${formatTime(stats.next_pickup_at)}`
+                : stats
+                  ? "Nothing scheduled"
+                  : ""}
+            </span>
           </article>
 
           <article>
@@ -839,8 +1107,13 @@ function DashboardScreen({ go }: { go: (s: Screen) => void }) {
               <Icon name="shield" />
             </div>
             <p>Farmers pending</p>
-            <strong>3</strong>
-            <span className="attention">Needs review</span>
+            <strong>{show(stats?.farmers_pending)}</strong>
+            {stats &&
+              (stats.farmers_pending > 0 ? (
+                <span className="attention">Needs review</span>
+              ) : (
+                <span>All reviewed</span>
+              ))}
           </article>
 
           <article className="impact-stat">
@@ -849,9 +1122,9 @@ function DashboardScreen({ go }: { go: (s: Screen) => void }) {
             </div>
             <p>Food rescued</p>
             <strong>
-              1,284 <small>kg</small>
+              {stats ? formatKg(stats.food_rescued_kg) : "…"} <small>kg</small>
             </strong>
-            <span>Across 86 donations</span>
+            <span>{stats ? `Across ${stats.delivered_donations} donations` : ""}</span>
           </article>
         </section>
 
@@ -877,32 +1150,40 @@ function DashboardScreen({ go }: { go: (s: Screen) => void }) {
                 <span></span>
               </div>
 
-              {ACTIVITY.map((item) => (
-                <div key={item.title} className="activity-row">
-                  <div className="donation-info">
-                    <span className="produce-dot">
-                      <Icon name="leaf" size={15} />
-                    </span>
+              {data?.activity.map((item) => {
+                const status = donationStatus(item.status, item.next_pickup_at)
+                const title = `${item.produce} · ${formatKg(item.quantity_kg)} kg`
+                return (
+                  <div key={item.id} className="activity-row">
+                    <div className="donation-info">
+                      <span className="produce-dot">
+                        <Icon name="leaf" size={15} />
+                      </span>
 
-                    <div>
-                      <strong>{item.title}</strong>
-                      <small>{item.farm}</small>
+                      <div>
+                        <strong>{title}</strong>
+                        <small>{item.farm_name}</small>
+                      </div>
                     </div>
+
+                    <span className="recipient">{item.recipient_name ?? "Not matched yet"}</span>
+
+                    <span className={`status ${status.tone}`}>{status.label}</span>
+
+                    <button
+                      type="button"
+                      aria-label={`Open ${title}`}
+                      onClick={() => go("donations")}
+                    >
+                      <Icon name="arrow" size={16} />
+                    </button>
                   </div>
-
-                  <span className="recipient">{item.partner}</span>
-
-                  <span className={`status ${item.tone}`}>{item.status}</span>
-
-                  <button
-                    type="button"
-                    aria-label={`Open ${item.title}`}
-                    onClick={() => go("donations")}
-                  >
-                    <Icon name="arrow" size={16} />
-                  </button>
-                </div>
-              ))}
+                )
+              })}
+              {data && data.activity.length === 0 && (
+                <p className="empty-state">No donations yet.</p>
+              )}
+              {!data && !error && <p className="empty-state">Loading…</p>}
             </div>
           </article>
 
@@ -914,47 +1195,38 @@ function DashboardScreen({ go }: { go: (s: Screen) => void }) {
                 <h2>Priority queue</h2>
               </div>
 
-              <span className="queue-count">6</span>
+              <span className="queue-count">{data?.priority_total ?? "…"}</span>
             </div>
 
-            <div className="queue-item">
-              <span className="queue-icon">
-                <Icon name="shield" />
-              </span>
-              <div>
-                <strong>3 farmers waiting</strong>
-                <p>Review new account applications</p>
-              </div>
-              <button type="button" onClick={() => go("farmers")}>
-                <Icon name="arrow" size={15} />
-              </button>
-            </div>
-
-            <div className="queue-item">
-              <span className="queue-icon amber-bg">
-                <Icon name="clock" />
-              </span>
-              <div>
-                <strong>2 pickups unassigned</strong>
-                <p>Assign a volunteer before noon</p>
-              </div>
-              <button type="button" onClick={() => go("pickups")}>
-                <Icon name="arrow" size={15} />
-              </button>
-            </div>
-
-            <div className="queue-item">
-              <span className="queue-icon blue-bg">
-                <Icon name="gift" />
-              </span>
-              <div>
-                <strong>1 donation expiring</strong>
-                <p>Find a recipient within 4 hours</p>
-              </div>
-              <button type="button" onClick={() => go("donations")}>
-                <Icon name="arrow" size={15} />
-              </button>
-            </div>
+            {data?.priority_queue.map((item) => {
+              const look = QUEUE_LOOK[item.type] ?? QUEUE_LOOK.donations_expiring
+              return (
+                <div key={item.type} className="queue-item">
+                  <span className={`queue-icon ${look.className}`}>
+                    <Icon name={look.icon} />
+                  </span>
+                  <div>
+                    <strong>
+                      {item.count}{" "}
+                      {item.count === 1
+                        ? item.title.replace("farmers", "farmer").replace("pickups", "pickup").replace("donations", "donation")
+                        : item.title}
+                    </strong>
+                    <p>{item.detail}</p>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={`Go to ${item.title}`}
+                    onClick={() => go(look.screen)}
+                  >
+                    <Icon name="arrow" size={15} />
+                  </button>
+                </div>
+              )
+            })}
+            {data && data.priority_queue.length === 0 && (
+              <p className="empty-state">Nothing needs your attention right now.</p>
+            )}
           </article>
 
           {/* ── Rescue volume chart ──────────────────────────────────────── */}
@@ -979,28 +1251,38 @@ function DashboardScreen({ go }: { go: (s: Screen) => void }) {
               </div>
             </div>
 
-            <div className="volume-chart">
-              {VOLUME_BARS.map((height, i) => {
-                const barHeight =
-                  range === "7 days" ? height : Math.max(25, height - 10)
-
+            <div className="volume-chart live">
+              {volume.map((day) => {
+                const height = maxKg > 0 ? Math.max(day.kg_rescued > 0 ? 6 : 2, (day.kg_rescued / maxKg) * 100) : 2
                 return (
-                  <div key={i} className="chart-column">
-                    <span
-                      style={{
-                        height: `${barHeight}%`,
-                      }}
-                    ></span>
+                  <div
+                    key={day.day}
+                    className="chart-column"
+                    title={`${new Date(`${day.day}T00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: ${formatKg(day.kg_rescued)} kg`}
+                  >
+                    <span style={{ height: `${height}%` }}></span>
                   </div>
                 )
               })}
             </div>
 
             <div className="chart-meta">
-              {CHART_DAYS.map((day) => (
-                <span key={day}>{day}</span>
-              ))}
+              {volume
+                .filter((_, i) => i % labelEvery === 0)
+                .map((day) => {
+                  const date = new Date(`${day.day}T00:00`)
+                  return (
+                    <span key={day.day}>
+                      {volume.length > 7
+                        ? date.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                        : date.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}
+                    </span>
+                  )
+                })}
             </div>
+            {data && maxKg === 0 && (
+              <p className="chart-empty">No deliveries in this period yet.</p>
+            )}
           </article>
         </section>
       </main>
@@ -1509,90 +1791,93 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
   )
 }
 
-// ── Farmers Screen ────────────────────────────────────────────────────────────
+// ── Farmers Screen (coordinators review farmer accounts here) ─────────────────
+type FarmRecord = Farm & {
+  donations: { produce: string; status: DonationStatus; created_at: string }[]
+}
+
+const FARM_STATUS: Record<FarmStatus, { label: string; tone: ActivityTone }> = {
+  pending: { label: "Pending review", tone: "amber" },
+  approved: { label: "Active", tone: "green" },
+  rejected: { label: "Rejected", tone: "dark" },
+  suspended: { label: "Suspended", tone: "dark" },
+}
+
+function topProduce(names: string[], limit: number) {
+  const counts = new Map<string, number>()
+  for (const name of names) {
+    const key = name.trim()
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([name]) => name)
+}
+
 function FarmersScreen({ go }: { go: (s: Screen) => void }) {
+  const { account, setPendingFarmers } = useSession()
+  const canManage = account?.profile.role === "admin" || account?.profile.role === "coordinator"
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState("All farmers")
-  const [reviewed, setReviewed] = useState<string[]>([])
-  const farmers = [
-    {
-      id: "navarro",
-      name: "Navarro Family Farm",
-      initials: "NF",
-      area: "North District",
-      produce: "Peaches, carrots",
-      donations: "18 donations",
-      joined: "Mar 2024",
-      status: "Active",
-    },
-    {
-      id: "aquino",
-      name: "Aquino Highland Greens",
-      initials: "AH",
-      area: "Highland",
-      produce: "Sweet potatoes, greens",
-      donations: "12 donations",
-      joined: "Jun 2024",
-      status: "Active",
-    },
-    {
-      id: "santos",
-      name: "Santos Organic Farm",
-      initials: "SO",
-      area: "East Valley",
-      produce: "Tomatoes, peppers",
-      donations: "9 donations",
-      joined: "Aug 2024",
-      status: "Active",
-    },
-    {
-      id: "riverbend",
-      name: "Riverbend Growers Co-op",
-      initials: "RG",
-      area: "Riverside",
-      produce: "Seasonal vegetables",
-      donations: "New application",
-      joined: "Today",
-      status: "Pending review",
-    },
-    {
-      id: "greenacres",
-      name: "Green Acres Collective",
-      initials: "GA",
-      area: "South District",
-      produce: "Squash, leafy greens",
-      donations: "New application",
-      joined: "Yesterday",
-      status: "Pending review",
-    },
-    {
-      id: "meadow",
-      name: "Meadow Lane Produce",
-      initials: "ML",
-      area: "West District",
-      produce: "Apples, root vegetables",
-      donations: "New application",
-      joined: "Oct 25",
-      status: "Pending review",
-    },
-  ]
-  const filteredFarmers = farmers.filter((farmer) => {
-    const status = reviewed.includes(farmer.id) ? "Active" : farmer.status
+  const [farmers, setFarmers] = useState<FarmRecord[] | null>(null)
+  const [error, setError] = useState("")
+  const [busyId, setBusyId] = useState<string | null>(null)
+
+  const load = useCallback(() => {
+    setError("")
+    api
+      .get<FarmRecord[]>("/farmers?limit=500")
+      .then((rows) => {
+        setFarmers(rows)
+        setPendingFarmers(rows.filter((farm) => farm.status === "pending").length)
+      })
+      .catch((err) => setError(errorText(err)))
+  }, [])
+
+  useEffect(load, [load])
+
+  const review = async (farm: FarmRecord, action: "approve" | "reject" | "suspend") => {
+    if (action !== "approve" && !window.confirm(`${action === "reject" ? "Reject" : "Suspend"} ${farm.farm_name}?`)) return
+    setBusyId(farm.id)
+    setError("")
+    try {
+      const updated = await api.post<Farm>(`/farmers/${farm.id}/${action}`)
+      const next = all.map((row) => (row.id === farm.id ? { ...row, ...updated } : row))
+      setFarmers(next)
+      setPendingFarmers(next.filter((row) => row.status === "pending").length)
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const all = farmers ?? []
+  const pending = all.filter((farm) => farm.status === "pending").length
+  const active = all.filter((farm) => farm.status === "approved")
+  const areas = new Set(active.map((farm) => farm.location).filter(Boolean))
+  const now = new Date()
+  const donationsThisMonth = all
+    .flatMap((farm) => farm.donations)
+    .filter((donation) => {
+      const date = new Date(donation.created_at)
+      return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear()
+    }).length
+  const [mostDonated] = topProduce(all.flatMap((farm) => farm.donations.map((d) => d.produce)), 1)
+
+  const filteredFarmers = all.filter((farm) => {
+    const label = FARM_STATUS[farm.status].label
     const matchesFilter =
       filter === "All farmers" ||
-      (filter === "Pending review"
-        ? status === "Pending review"
-        : status === "Active")
+      (filter === "Pending review" ? farm.status === "pending" : filter === "Active" ? farm.status === "approved" : label === filter)
     return (
       matchesFilter &&
-      `${farmer.name} ${farmer.area} ${farmer.produce}`
+      `${farm.farm_name} ${farm.contact_name} ${farm.location ?? ""} ${farm.donations.map((d) => d.produce).join(" ")}`
         .toLowerCase()
         .includes(search.toLowerCase())
     )
   })
 
   return (
-    <AppShell go={go} active="farmers" title="Farmers">
+    <AppShell go={go} active="farmers" title="Farmers" live>
       <main className="dashboard-main">
         <section className="page-heading">
           <div>
@@ -1605,36 +1890,36 @@ function FarmersScreen({ go }: { go: (s: Screen) => void }) {
             className="primary-action"
             onClick={() => setFilter("Pending review")}
           >
-            Review applications · 3
+            Review applications · {farmers ? pending : "…"}
           </button>
         </section>
         <PageMetrics
           items={[
             {
               label: "Partner farms",
-              value: "24",
-              detail: "Across 6 districts",
+              value: farmers ? String(active.length) : "…",
+              detail: areas.size ? `Across ${areas.size} ${areas.size === 1 ? "area" : "areas"}` : "Approved farms",
               icon: "shield",
               tone: "lime",
             },
             {
               label: "Applications",
-              value: String(Math.max(0, 3 - reviewed.length)),
+              value: farmers ? String(pending) : "…",
               detail: "Waiting for review",
               icon: "clock",
               tone: "cream",
             },
             {
               label: "Donations this month",
-              value: "86",
-              detail: "+12% from last month",
+              value: farmers ? String(donationsThisMonth) : "…",
+              detail: "From all farms",
               icon: "gift",
               tone: "mint",
             },
             {
               label: "Top produce",
-              value: "Produce",
-              detail: "Seasonal harvests",
+              value: mostDonated ?? "—",
+              detail: "Most donated",
               icon: "leaf",
               tone: "lime",
             },
@@ -1662,10 +1947,18 @@ function FarmersScreen({ go }: { go: (s: Screen) => void }) {
           <ListToolbar
             search={search}
             onSearch={setSearch}
-            filters={["All farmers", "Pending review", "Active"]}
+            filters={["All farmers", "Pending review", "Active", "Suspended"]}
             activeFilter={filter}
             onFilter={setFilter}
           />
+          {error && (
+            <div className="load-error inline-note" role="alert">
+              <span>{error}</span>
+              <button type="button" className="quiet-action" onClick={load}>
+                Reload
+              </button>
+            </div>
+          )}
           <div className="table-scroll">
             <div className="record-table farmers-table">
               <div className="record-table-head">
@@ -1677,46 +1970,66 @@ function FarmersScreen({ go }: { go: (s: Screen) => void }) {
                 <span>Status</span>
                 <span></span>
               </div>
-              {filteredFarmers.map((farmer) => {
-                const status = reviewed.includes(farmer.id)
-                  ? "Active"
-                  : farmer.status
+              {filteredFarmers.map((farm) => {
+                const status = FARM_STATUS[farm.status]
+                const produce = topProduce(farm.donations.map((d) => d.produce), 2)
+                const count = farm.donations.length
+                const busy = busyId === farm.id
                 return (
-                  <div className="record-row" key={farmer.id}>
+                  <div className="record-row" key={farm.id}>
                     <div className="record-primary">
-                      <span className="initial-avatar">{farmer.initials}</span>
+                      <span className="initial-avatar">{initials(farm.farm_name)}</span>
                       <div>
-                        <strong>{farmer.name}</strong>
-                        <small>Local farm partner</small>
+                        <strong>{farm.farm_name}</strong>
+                        <small>
+                          {[farm.contact_name, farm.phone].filter(Boolean).join(" · ") || "Local farm partner"}
+                        </small>
                       </div>
                     </div>
-                    <span>{farmer.area}</span>
-                    <span>{farmer.produce}</span>
-                    <span>{farmer.donations}</span>
-                    <span>{farmer.joined}</span>
-                    <StatusPill
-                      label={status}
-                      tone={status === "Active" ? "green" : "amber"}
-                    />
-                    {status === "Pending review" ? (
-                      <button
-                        type="button"
-                        className="row-action"
-                        onClick={() =>
-                          setReviewed((current) => [...current, farmer.id])
-                        }
-                      >
-                        Approve
-                      </button>
+                    <span title={farm.location ?? ""}>{farm.location ?? "—"}</span>
+                    <span>{produce.length ? produce.join(", ") : "No donations yet"}</span>
+                    <span>
+                      {farm.status === "pending"
+                        ? "New application"
+                        : `${count} ${count === 1 ? "donation" : "donations"}`}
+                    </span>
+                    <span>{formatJoined(farm.created_at)}</span>
+                    <StatusPill label={status.label} tone={status.tone} />
+                    {canManage ? (
+                      <div className="row-actions">
+                        {farm.status === "pending" && (
+                          <>
+                            <button type="button" className="row-action" disabled={busy} onClick={() => review(farm, "approve")}>
+                              Approve
+                            </button>
+                            <button type="button" className="row-action danger" disabled={busy} onClick={() => review(farm, "reject")}>
+                              Reject
+                            </button>
+                          </>
+                        )}
+                        {farm.status === "approved" && (
+                          <button type="button" className="row-action danger" disabled={busy} onClick={() => review(farm, "suspend")}>
+                            Suspend
+                          </button>
+                        )}
+                        {(farm.status === "suspended" || farm.status === "rejected") && (
+                          <button type="button" className="row-action" disabled={busy} onClick={() => review(farm, "approve")}>
+                            Reactivate
+                          </button>
+                        )}
+                      </div>
                     ) : (
                       <span className="muted-cell">—</span>
                     )}
                   </div>
                 )
               })}
-              {filteredFarmers.length === 0 && (
-                <p className="empty-state">No farmers match your search.</p>
+              {farmers && filteredFarmers.length === 0 && (
+                <p className="empty-state">
+                  {all.length ? "No farmers match your search." : "No farmers have signed up yet."}
+                </p>
               )}
+              {!farmers && !error && <p className="empty-state">Loading…</p>}
             </div>
           </div>
         </section>
@@ -2445,13 +2758,466 @@ function ReportsScreen({ go }: { go: (s: Screen) => void }) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Farmer screens
+// ────────────────────────────────────────────────────────────────────────────
+
+const FARMER_STATUS_COPY: Record<Exclude<FarmStatus, "approved">, { eyebrow: string; title: string; text: string }> = {
+  pending: {
+    eyebrow: "Application received",
+    title: "Your account is pending review.",
+    text: "A coordinator will verify your details (by phone or your cooperative / barangay list). Once approved, you can post surplus harvest here.",
+  },
+  rejected: {
+    eyebrow: "Application not approved",
+    title: "Your application wasn't approved.",
+    text: "If you think this is a mistake, contact your coordinator. They can review your account again.",
+  },
+  suspended: {
+    eyebrow: "Account suspended",
+    title: "Your account is suspended.",
+    text: "You can't post donations right now. Please contact your coordinator for help.",
+  },
+}
+
+// ── Farmer status (pending / rejected / suspended) ────────────────────────────
+function FarmerStatusScreen({ go }: { go: (s: Screen) => void }) {
+  const { account, setAccount } = useSession()
+  const [checking, setChecking] = useState(false)
+  const [note, setNote] = useState("")
+  const farm = account?.farmer
+  const status = farm && farm.status !== "approved" ? farm.status : "pending"
+  const copy = FARMER_STATUS_COPY[status]
+
+  const checkAgain = async () => {
+    setChecking(true)
+    setNote("")
+    try {
+      const latest = await loadAccount()
+      setAccount(latest)
+      if (latest.farmer?.status === "approved") go("farmer-dashboard")
+      else setNote("No change yet. We'll let you in as soon as you're approved.")
+    } catch (err) {
+      setNote(errorText(err))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const leave = async () => {
+    await signOut()
+    setAccount(null)
+    go("signin")
+  }
+
+  return (
+    <AuthLayout go={go}>
+      <section className="signup-success farmer-status-card" role="status">
+        <span className="signup-success-icon">
+          <Icon name={status === "pending" ? "clock" : "shield"} size={24} />
+        </span>
+        <p className="auth-eyebrow">{copy.eyebrow}</p>
+        <h1>{copy.title}</h1>
+        <p>{copy.text}</p>
+        {farm ? (
+          <dl className="status-facts">
+            <div>
+              <dt>Farm</dt>
+              <dd>{farm.farm_name}</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd>{FARM_STATUS[farm.status].label}</dd>
+            </div>
+            <div>
+              <dt>Applied</dt>
+              <dd>{formatJoined(farm.created_at)}</dd>
+            </div>
+          </dl>
+        ) : (
+          <p className="auth-feedback">
+            We couldn't find a farm on this account. Please contact your coordinator.
+          </p>
+        )}
+        <div className="status-actions">
+          <button type="button" className="auth-submit" onClick={checkAgain} disabled={checking}>
+            {checking ? "Checking..." : "Check status again"}
+          </button>
+          <button type="button" className="outline-action" onClick={leave}>
+            Log out
+          </button>
+        </div>
+        {note && (
+          <p className="auth-feedback" role="status">
+            {note}
+          </p>
+        )}
+      </section>
+    </AuthLayout>
+  )
+}
+
+// ── Farmer dashboard (approved farmers) ───────────────────────────────────────
+type FarmerDonation = {
+  id: string
+  produce: string
+  quantity_kg: number | string
+  status: DonationStatus
+  expires_at: string | null
+  notes: string | null
+  created_at: string
+  recipient: { name: string } | null
+  pickups: {
+    id: string
+    scheduled_at: string
+    status: string
+    volunteer: { full_name: string; phone: string | null } | null
+  }[]
+}
+
+type FarmerDashboardData = {
+  farm: Farm
+  stats: {
+    active_donations: number
+    delivered_donations: number
+    kg_rescued: number
+    total_donations: number
+    next_pickup_at: string | null
+  }
+  donations: FarmerDonation[]
+}
+
+function farmerDonationStatus(donation: FarmerDonation): { label: string; tone: ActivityTone } {
+  if (donation.status === "new") return { label: "Waiting for match", tone: "blue" }
+  const next = donation.pickups.find((pickup) => pickup.status === "scheduled")
+  return donationStatus(donation.status, next?.scheduled_at)
+}
+
+function FarmerDashboardScreen({ go }: { go: (s: Screen) => void }) {
+  const { account, setAccount } = useSession()
+  const [data, setData] = useState<FarmerDashboardData | null>(null)
+  const [error, setError] = useState("")
+  const [search, setSearch] = useState("")
+  const [filter, setFilter] = useState("All")
+  const [showForm, setShowForm] = useState(true)
+  const [produce, setProduce] = useState("")
+  const [quantity, setQuantity] = useState("")
+  const [useBy, setUseBy] = useState("")
+  const [notes, setNotes] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [formMessage, setFormMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
+
+  const load = useCallback(() => {
+    setError("")
+    api
+      .get<FarmerDashboardData>("/farmer/dashboard")
+      .then((result) => {
+        setData(result)
+        // A coordinator may have changed this farm's status since login
+        if (account && result.farm.status !== account.farmer?.status) {
+          const updated = { ...account, farmer: result.farm }
+          setAccount(updated)
+          if (result.farm.status !== "approved") go("farmer-status")
+        }
+      })
+      .catch((err) => setError(errorText(err)))
+  }, [account])
+
+  useEffect(load, [])
+
+  const postDonation = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setSaving(true)
+    setFormMessage(null)
+    try {
+      const created = await api.post<FarmerDonation>("/farmer/donations", {
+        produce: produce.trim(),
+        quantity_kg: Number(quantity),
+        // "use by" date means the end of that day, in this computer's time zone
+        expires_at: useBy ? new Date(`${useBy}T23:59:00`).toISOString() : null,
+        notes: notes.trim() || null,
+      })
+      setData((current) =>
+        current
+          ? {
+              ...current,
+              donations: [created, ...current.donations],
+              stats: {
+                ...current.stats,
+                active_donations: current.stats.active_donations + 1,
+                total_donations: current.stats.total_donations + 1,
+              },
+            }
+          : current,
+      )
+      setProduce("")
+      setQuantity("")
+      setUseBy("")
+      setNotes("")
+      setFilter("All")
+      setFormMessage({ kind: "success", text: `Posted ${created.produce}. The coordinator will match it with a food bank.` })
+    } catch (err) {
+      setFormMessage({ kind: "error", text: errorText(err) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const cancelDonation = async (donation: FarmerDonation) => {
+    if (!window.confirm(`Cancel your ${donation.produce} donation?`)) return
+    setBusyId(donation.id)
+    try {
+      await api.post(`/farmer/donations/${donation.id}/cancel`)
+      load()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const farm = data?.farm ?? account?.farmer
+  const stats = data?.stats
+  const filters = ["All", "Waiting for match", "Matched", "Pickup scheduled", "Delivered"]
+  const donations = (data?.donations ?? []).filter((donation) => {
+    const status = farmerDonationStatus(donation).label
+    const matchesFilter =
+      filter === "All" ||
+      status === filter ||
+      (filter === "Pickup scheduled" && status === "Pickup today")
+    return matchesFilter && donation.produce.toLowerCase().includes(search.toLowerCase())
+  })
+  const firstName = account?.profile.first_name
+  const today = new Date()
+  const minDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`
+
+  return (
+    <AppShell go={go} active="farmer-dashboard" title="My farm" nav={FARMER_NAV} live>
+      <main className="dashboard-main">
+        <section className="page-heading">
+          <div>
+            <p className="eyebrow">{farm?.farm_name ?? "My farm"}</p>
+            <h1>My donations</h1>
+            <p>
+              {greeting()}
+              {firstName ? `, ${firstName}` : ""}. Post surplus harvest and follow
+              where it goes.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="primary-action"
+            onClick={() => setShowForm((open) => !open)}
+          >
+            {showForm ? "Hide form" : "+ Post surplus"}
+          </button>
+        </section>
+
+        {error && (
+          <div className="load-error" role="alert">
+            <span>{error}</span>
+            <button type="button" className="quiet-action" onClick={load}>
+              Try again
+            </button>
+          </div>
+        )}
+
+        <PageMetrics
+          items={[
+            {
+              label: "Active donations",
+              value: stats ? String(stats.active_donations) : "…",
+              detail: "Waiting or on the way",
+              icon: "gift",
+              tone: "lime",
+            },
+            {
+              label: "Next pickup",
+              value: stats?.next_pickup_at ? formatTime(stats.next_pickup_at) : stats ? "—" : "…",
+              detail: stats?.next_pickup_at ? formatDateTime(stats.next_pickup_at).split(",")[0] : "Nothing scheduled",
+              icon: "truck",
+              tone: "mint",
+            },
+            {
+              label: "Delivered",
+              value: stats ? String(stats.delivered_donations) : "…",
+              detail: `Out of ${stats?.total_donations ?? "…"} posted`,
+              icon: "home",
+              tone: "cream",
+            },
+            {
+              label: "Food rescued",
+              value: stats ? `${formatKg(stats.kg_rescued)} kg` : "…",
+              detail: "Reached a food bank",
+              icon: "leaf",
+              tone: "lime",
+            },
+          ]}
+        />
+
+        {showForm && (
+          <form className="inline-form farmer-form" onSubmit={postDonation}>
+            <div>
+              <p className="eyebrow">Quick entry</p>
+              <strong>Post surplus harvest</strong>
+            </div>
+            <label>
+              Produce
+              <input
+                required
+                value={produce}
+                onChange={(event) => setProduce(event.target.value)}
+                placeholder="e.g. Tomatoes"
+              />
+            </label>
+            <label>
+              Quantity (kg)
+              <input
+                required
+                type="number"
+                min="0.1"
+                step="0.1"
+                value={quantity}
+                onChange={(event) => setQuantity(event.target.value)}
+                placeholder="e.g. 25"
+              />
+            </label>
+            <label>
+              Use by (optional)
+              <input
+                type="date"
+                min={minDate}
+                value={useBy}
+                onChange={(event) => setUseBy(event.target.value)}
+              />
+            </label>
+            <label>
+              Notes (optional)
+              <input
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+                placeholder="e.g. Ready at the gate after 8 AM"
+              />
+            </label>
+            <button type="submit" className="primary-action" disabled={saving}>
+              {saving ? "Posting..." : "Post donation"}
+            </button>
+            {formMessage && (
+              <p className={`form-message ${formMessage.kind}`} role={formMessage.kind === "error" ? "alert" : "status"}>
+                {formMessage.text}
+              </p>
+            )}
+          </form>
+        )}
+
+        <section className="panel records-panel">
+          <div className="records-heading">
+            <div>
+              <p className="eyebrow">Your harvest</p>
+              <h2>
+                Donations <span>{donations.length}</span>
+              </h2>
+            </div>
+            <button type="button" className="quiet-action" onClick={load}>
+              Refresh
+            </button>
+          </div>
+          <ListToolbar
+            search={search}
+            onSearch={setSearch}
+            filters={filters}
+            activeFilter={filter}
+            onFilter={setFilter}
+          />
+          <div className="table-scroll">
+            <div className="record-table farmer-donations-table">
+              <div className="record-table-head">
+                <span>Produce</span>
+                <span>Quantity</span>
+                <span>Food bank</span>
+                <span>Pickup</span>
+                <span>Status</span>
+                <span></span>
+              </div>
+              {donations.map((donation) => {
+                const status = farmerDonationStatus(donation)
+                const pickup =
+                  donation.pickups.find((p) => p.status === "scheduled") ??
+                  donation.pickups.find((p) => p.status === "completed")
+                return (
+                  <div className="record-row" key={donation.id}>
+                    <div className="record-primary">
+                      <span className="produce-dot">
+                        <Icon name="leaf" size={15} />
+                      </span>
+                      <div>
+                        <strong>{donation.produce}</strong>
+                        <small>
+                          Posted {formatDateTime(donation.created_at)}
+                          {donation.expires_at ? ` · use by ${new Date(donation.expires_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}
+                        </small>
+                      </div>
+                    </div>
+                    <span>{formatKg(donation.quantity_kg)} kg</span>
+                    <span>{donation.recipient?.name ?? "Not matched yet"}</span>
+                    <span title={pickup?.volunteer?.phone ?? ""}>
+                      {pickup
+                        ? `${formatDateTime(pickup.scheduled_at)}${pickup.volunteer ? ` · ${pickup.volunteer.full_name}` : ""}`
+                        : "—"}
+                    </span>
+                    <StatusPill label={status.label} tone={status.tone} />
+                    {donation.status === "new" ? (
+                      <button
+                        type="button"
+                        className="row-action danger"
+                        disabled={busyId === donation.id}
+                        onClick={() => cancelDonation(donation)}
+                      >
+                        Cancel
+                      </button>
+                    ) : (
+                      <span className="muted-cell">—</span>
+                    )}
+                  </div>
+                )
+              })}
+              {data && donations.length === 0 && (
+                <p className="empty-state">
+                  {data.donations.length
+                    ? "No donations match your search."
+                    : "You haven't posted anything yet. Use the form above to post surplus harvest."}
+                </p>
+              )}
+              {!data && !error && <p className="empty-state">Loading…</p>}
+            </div>
+          </div>
+        </section>
+      </main>
+    </AppShell>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // App
 // ────────────────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState<Screen>("splash")
+  const [account, setAccount] = useState<Account | null>(null)
+  const [pendingFarmers, setPendingFarmers] = useState<number | null>(null)
 
   const go = (next: Screen) => {
     setScreen(next)
+    window.scrollTo(0, 0)
+  }
+
+  // Keep people on the screens their account is allowed to see
+  let current = screen
+  if (!PUBLIC_SCREENS.includes(screen)) {
+    if (!account) current = "signin"
+    else if (account.profile.role === "farmer") {
+      if (!FARMER_SCREENS.includes(screen)) current = homeFor(account)
+      else if (screen === "farmer-dashboard" && account.farmer?.status !== "approved") current = "farmer-status"
+    } else if (FARMER_SCREENS.includes(screen)) current = "dashboard"
   }
 
   const screenMap: Record<Screen, ReactNode> = {
@@ -2465,7 +3231,13 @@ export default function App() {
     volunteers: <VolunteersScreen go={go} />,
     recipients: <RecipientsScreen go={go} />,
     reports: <ReportsScreen go={go} />,
+    "farmer-status": <FarmerStatusScreen go={go} />,
+    "farmer-dashboard": <FarmerDashboardScreen go={go} />,
   }
 
-  return <>{screenMap[screen]}</>
+  return (
+    <SessionContext.Provider value={{ account, setAccount, pendingFarmers, setPendingFarmers }}>
+      {screenMap[current]}
+    </SessionContext.Provider>
+  )
 }

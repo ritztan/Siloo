@@ -21,6 +21,8 @@ farmers = crud_router(
     table="farmers", prefix="/farmers", label="Farmer",
     create_model=FarmerIn, update_model=FarmerUpdate,
     search_column="farm_name", has_status=True,
+    # each farmer comes with their donations' produce, for counts on the Farmers page
+    select="*, donations(produce, status, created_at)",
 )
 
 
@@ -41,6 +43,12 @@ def approve_farmer(farmer_id: UUID, token: str = Depends(get_token), db: Client 
 @farmers.post("/{farmer_id}/reject", tags=["farmers"])
 def reject_farmer(farmer_id: UUID, token: str = Depends(get_token), db: Client = Depends(get_db)):
     return _review(farmer_id, "rejected", token, db)
+
+
+@farmers.post("/{farmer_id}/suspend", tags=["farmers"])
+def suspend_farmer(farmer_id: UUID, token: str = Depends(get_token), db: Client = Depends(get_db)):
+    """Stop a farmer from posting donations (they can still log in and see their status)."""
+    return _review(farmer_id, "suspended", token, db)
 
 
 # ---------- volunteers & recipients ----------

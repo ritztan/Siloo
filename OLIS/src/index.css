@@ -474,3 +474,42 @@ h1:before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; bord
   .signup-fields { grid-template-columns: 1fr; }
   .signup-form fieldset { padding-bottom: 13px; }
 }
+
+/* ── Live data (connected to Supabase) ───────────────────────────────────── */
+.demo-status.live { border-style: solid; color: var(--green); }
+.demo-status.live i { background: var(--green); box-shadow: 0 0 0 3px var(--mint); }
+@media (max-width: 470px) {
+  .demo-status:after { content: 'Sample'; }
+  .demo-status.live:after { content: 'Live'; }
+}
+.auth-feedback.auth-error { color: #a33a2a; font-size: 9px; }
+.auth-submit:disabled, .primary-action:disabled, .row-action:disabled, .outline-action:disabled { opacity: .6; cursor: wait; }
+.load-error { margin: 0 0 16px; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #efd2c9; border-radius: 9px; color: #8c3527; background: #fdf3f0; font-size: 10px; line-height: 1.5; }
+.load-error.inline-note { margin: 12px 20px; }
+.volume-chart.live .chart-column span { min-height: 2px; }
+.volume-chart.live .chart-column:nth-child(n) span { background: var(--mint); }
+.volume-chart.live .chart-column:last-child span { background: var(--green); }
+.volume-chart.live:has(.chart-column:nth-child(8)) { gap: 3px; }
+.chart-empty { margin: -6px 24px 16px; color: var(--muted); font-size: 9px; }
+
+/* Farmers page: room for two review buttons */
+.farmers-table .record-table-head, .farmers-table .record-row { grid-template-columns: minmax(190px, 1.5fr) .8fr 1.2fr .85fr .65fr 1fr 120px; }
+.row-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.row-action.danger { color: #a33a2a; }
+
+/* Farmer dashboard */
+.farmer-donations-table .record-table-head, .farmer-donations-table .record-row { grid-template-columns: minmax(170px, 1.4fr) .6fr 1fr 1.3fr .9fr 70px; }
+.inline-form.farmer-form { flex-wrap: wrap; }
+.inline-form.farmer-form label { flex: 1 1 140px; }
+.inline-form textarea { width: 100%; min-height: 38px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 5px; outline: 0; color: var(--forest); background: white; font: inherit; font-size: 10px; resize: vertical; }
+.inline-form .form-message { flex-basis: 100%; margin: 0; font-size: 9px; }
+.inline-form .form-message.error { color: #a33a2a; }
+.inline-form .form-message.success { color: var(--green); }
+@media (max-width: 760px) { .inline-form { flex-direction: column; align-items: stretch; } }
+
+/* Farmer status (pending / rejected / suspended) */
+.farmer-status-card .status-facts { margin: 0 0 22px; padding: 14px 16px; display: grid; gap: 8px; border-radius: 9px; background: #f4f8f4; font-size: 10px; }
+.farmer-status-card .status-facts div { display: flex; justify-content: space-between; gap: 12px; }
+.farmer-status-card .status-facts dt { color: var(--muted); }
+.farmer-status-card .status-facts dd { margin: 0; color: var(--forest); font-weight: 700; text-align: right; }
+.farmer-status-card .status-actions { display: flex; gap: 10px; flex-wrap: wrap; }

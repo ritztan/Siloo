@@ -35,3 +35,7 @@ CORS_ORIGINS += [
     for o in CORS_ORIGINS
 ]
 CORS_ORIGINS = sorted(set(CORS_ORIGINS))
+
+# Also allow the website on ANY port of this computer (Vite picks 5174, 5175...
+# when 5173 is busy). Only local addresses match, so other websites can't call the API.
+CORS_ORIGIN_REGEX = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"

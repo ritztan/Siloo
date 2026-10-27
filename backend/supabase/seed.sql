@@ -1,6 +1,6 @@
 -- =====================================================================
 -- Silo · sample data (same names the dashboard shows in demo mode)
--- Safe to skip in production. Run AFTER the migration.
+-- Safe to skip in production. Run AFTER all the migrations.
 -- =====================================================================
 
 insert into public.farmers (id, farm_name, contact_name, email, location, status) values
@@ -12,16 +12,16 @@ insert into public.farmers (id, farm_name, contact_name, email, location, status
   ('11111111-0000-0000-0000-000000000006', 'Bautista Fruit Orchard',  'Ana Bautista',  'bautista@example.com',  'Batangas',    'pending'),
   ('11111111-0000-0000-0000-000000000007', 'Mendoza Rice Fields',     'Paolo Mendoza', 'mendoza@example.com',   'Pampanga',    'pending');
 
-insert into public.recipients (id, name, type, contact_name, address) values
-  ('22222222-0000-0000-0000-000000000001', 'Hope Kitchen',   'kitchen',   'Grace Lim',     'Sampaloc, Manila'),
-  ('22222222-0000-0000-0000-000000000002', 'Food Bank 1',    'food_bank', 'Mark Tan',      'Quezon City'),
-  ('22222222-0000-0000-0000-000000000003', 'City Pantry',    'pantry',    'Joy Ramos',     'Ermita, Manila'),
-  ('22222222-0000-0000-0000-000000000004', 'Second Harvest', 'food_bank', 'Leo Villanueva','Pasig City');
+insert into public.recipients (id, name, type, contact_name, address, capacity, needs, status) values
+  ('22222222-0000-0000-0000-000000000001', 'Hope Kitchen',   'kitchen',   'Grace Lim',      'Sampaloc, Manila', '120 meals / day', 'Fruit, vegetables', 'open'),
+  ('22222222-0000-0000-0000-000000000002', 'Food Bank 1',    'food_bank', 'Mark Tan',       'Quezon City',      '350 households',  'Root vegetables',   'open'),
+  ('22222222-0000-0000-0000-000000000003', 'City Pantry',    'pantry',    'Joy Ramos',      'Ermita, Manila',   '80 households',   'Fresh produce',     'open'),
+  ('22222222-0000-0000-0000-000000000004', 'Second Harvest', 'food_bank', 'Leo Villanueva', 'Pasig City',       '200 meals / day', 'Leafy greens',      'limited');
 
-insert into public.volunteers (id, full_name, email, phone) values
-  ('33333333-0000-0000-0000-000000000001', 'Jessa Cruz',   'jessa@example.com', '0917 000 0001'),
-  ('33333333-0000-0000-0000-000000000002', 'Rafael Gomez', 'rafael@example.com','0917 000 0002'),
-  ('33333333-0000-0000-0000-000000000003', 'Kim Torres',   'kim@example.com',   '0917 000 0003');
+insert into public.volunteers (id, full_name, email, phone, service_area, vehicle_type, capacity_kg) values
+  ('33333333-0000-0000-0000-000000000001', 'Jessa Cruz',   'jessa@example.com',  '0917 000 0001', 'Sampaloc, Manila', 'van',    500),
+  ('33333333-0000-0000-0000-000000000002', 'Rafael Gomez', 'rafael@example.com', '0917 000 0002', 'Quezon City',      'pickup', 300),
+  ('33333333-0000-0000-0000-000000000003', 'Kim Torres',   'kim@example.com',    '0917 000 0003', 'Pasig City',       'car',    80);
 
 insert into public.donations (id, produce, quantity_kg, farmer_id, recipient_id, status, expires_at, delivered_at, created_by, created_at) values
   ('44444444-0000-0000-0000-000000000001', 'Peaches',        40, '11111111-0000-0000-0000-000000000001', '22222222-0000-0000-0000-000000000001', 'pickup_scheduled', now() + interval '2 days',  null, null, now() - interval '1 day'),

@@ -63,23 +63,33 @@ class FarmerUpdate(BaseModel):
 
 # ---------- volunteers ----------
 
+VehicleType = Literal["none", "motorcycle", "car", "pickup", "van", "truck"]
+
+
 class VolunteerIn(BaseModel):
     full_name: str = Field(min_length=1)
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    service_area: Optional[str] = None
+    vehicle_type: VehicleType = "none"
+    capacity_kg: Optional[Decimal] = Field(default=None, ge=0)
     is_active: bool = True
 
 
 class VolunteerUpdate(BaseModel):
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(default=None, min_length=1)
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    service_area: Optional[str] = None
+    vehicle_type: Optional[VehicleType] = None
+    capacity_kg: Optional[Decimal] = Field(default=None, ge=0)
     is_active: Optional[bool] = None
 
 
 # ---------- recipients ----------
 
-RecipientType = Literal["food_bank", "kitchen", "pantry", "shelter", "other"]
+RecipientType = Literal["food_bank", "kitchen", "pantry", "shelter", "rescue_partner", "other"]
+RecipientStatus = Literal["open", "limited", "closed"]
 
 
 class RecipientIn(BaseModel):
@@ -88,14 +98,20 @@ class RecipientIn(BaseModel):
     contact_name: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+    capacity: Optional[str] = None
+    needs: Optional[str] = None
+    status: RecipientStatus = "open"
 
 
 class RecipientUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1)
     type: Optional[RecipientType] = None
     contact_name: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+    capacity: Optional[str] = None
+    needs: Optional[str] = None
+    status: Optional[RecipientStatus] = None
 
 
 # ---------- donations ----------

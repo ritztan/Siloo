@@ -56,11 +56,16 @@ def suspend_farmer(farmer_id: UUID, token: str = Depends(get_token), db: Client 
 volunteers = crud_router(
     table="volunteers", prefix="/volunteers", label="Volunteer",
     create_model=VolunteerIn, update_model=VolunteerUpdate, search_column="full_name",
+    # each volunteer comes with their pickups, for "N pickups" and "On a pickup"
+    select="*, pickups(status, scheduled_at)",
 )
 
 recipients = crud_router(
     table="recipients", prefix="/recipients", label="Recipient",
     create_model=RecipientIn, update_model=RecipientUpdate, search_column="name",
+    # each recipient comes with the donations sent to them, for totals
+    select="*, donations(quantity_kg, status, delivered_at)",
+    has_status=True,
 )
 
 # ---------- donations ----------

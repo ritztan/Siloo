@@ -1381,7 +1381,7 @@ type DonationRecord = {
   pickups: { id: string; scheduled_at: string; status: string; volunteer_id: string | null }[]
 }
 
-type RecipientRecord = { id: string; name: string; type: string; address: string | null }
+type RecipientRecord = { id: string; name: string; type: string; address: string | null; status: string }
 type VolunteerRecord = { id: string; full_name: string; phone: string | null; is_active: boolean }
 
 const canManageOps = (account: Account | null) =>
@@ -1446,7 +1446,7 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
       .then(([donationRows, farmRows, recipientRows, volunteerRows]) => {
         setDonations(donationRows)
         setFarms(farmRows)
-        setRecipients(recipientRows)
+        setRecipients(recipientRows.filter((recipient) => recipient.status !== "closed"))
         setVolunteers(volunteerRows.filter((volunteer) => volunteer.is_active))
       })
       .catch((err) => setError(errorText(err)))
@@ -2428,102 +2428,245 @@ function FarmersScreen({ go }: { go: (s: Screen) => void }) {
 }
 
 // ── Volunteers Screen ─────────────────────────────────────────────────────────
+type VehicleType = "none" | "motorcycle" | "car" | "pickup" | "van" | "truck"
+
+type VolunteerFull = VolunteerRecord & {
+  email: string | null
+  service_area: string | null
+  vehicle_type: VehicleType
+  capacity_kg: number | string | null
+  pickups: { status: string; scheduled_at: string }[]
+}
+
+const VEHICLES: Record<VehicleType, string> = {
+  none: "No vehicle",
+  motorcycle: "Motorcycle",
+  car: "Car",
+  pickup: "Pickup truck",
+  van: "Van",
+  truck: "Truck",
+}
+
+function vehicleText(volunteer: VolunteerFull) {
+  const name = VEHICLES[volunteer.vehicle_type] ?? "No vehicle"
+  return volunteer.vehicle_type !== "none" && volunteer.capacity_kg
+    ? `${name} · ${formatKg(volunteer.capacity_kg)} kg`
+    : name
+}
+
+function volunteerToday(volunteer: VolunteerFull): { label: string; tone: ActivityTone } {
+  if (!volunteer.is_active) return { label: "Off duty", tone: "dark" }
+  const busy = volunteer.pickups.some(
+    (pickup) =>
+      pickup.status === "in_progress" ||
+      (pickup.status === "scheduled" && isToday(pickup.scheduled_at)),
+  )
+  return busy ? { label: "On a pickup", tone: "blue" } : { label: "Available", tone: "green" }
+}
+
+type VolunteerForm = {
+  full_name: string
+  phone: string
+  email: string
+  service_area: string
+  vehicle_type: VehicleType
+  capacity_kg: string
+}
+
+const emptyVolunteer: VolunteerForm = {
+  full_name: "",
+  phone: "",
+  email: "",
+  service_area: "",
+  vehicle_type: "none",
+  capacity_kg: "",
+}
+
+function volunteerBody(form: VolunteerForm) {
+  return {
+    full_name: form.full_name.trim(),
+    phone: form.phone.trim() || null,
+    email: form.email.trim() || null,
+    service_area: form.service_area.trim() || null,
+    vehicle_type: form.vehicle_type,
+    capacity_kg: form.vehicle_type === "none" || !form.capacity_kg ? null : Number(form.capacity_kg),
+  }
+}
+
 function VolunteersScreen({ go }: { go: (s: Screen) => void }) {
+  const { account } = useSession()
+  const canManage = canManageOps(account)
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState("All volunteers")
+  const [volunteers, setVolunteers] = useState<VolunteerFull[] | null>(null)
+  const [error, setError] = useState("")
   const [showInviteForm, setShowInviteForm] = useState(false)
-  const [newVolunteerName, setNewVolunteerName] = useState("")
-  const [newVolunteerArea, setNewVolunteerArea] = useState("")
-  const [selectedVolunteer, setSelectedVolunteer] = useState<{
-    name: string
-    initials: string
-    area: string
-    vehicle: string
-    shifts: string
-    status: string
-  } | null>(null)
-  const [volunteers, setVolunteers] = useState([
-    {
-      name: "Mia Santos",
-      initials: "MS",
-      area: "North District",
-      vehicle: "Van · 500 kg",
-      shifts: "12 pickups",
-      status: "Available",
-    },
-    {
-      name: "Leo Cruz",
-      initials: "LC",
-      area: "Riverside",
-      vehicle: "Pickup · 300 kg",
-      shifts: "9 pickups",
-      status: "On a pickup",
-    },
-    {
-      name: "Ana Reyes",
-      initials: "AR",
-      area: "East Valley",
-      vehicle: "Car · 80 kg",
-      shifts: "7 pickups",
-      status: "Available",
-    },
-    {
-      name: "Noah Garcia",
-      initials: "NG",
-      area: "Highland",
-      vehicle: "Van · 450 kg",
-      shifts: "4 pickups",
-      status: "Off duty",
-    },
-    {
-      name: "Sam Lee",
-      initials: "SL",
-      area: "South District",
-      vehicle: "No vehicle",
-      shifts: "3 pickups",
-      status: "Available",
-    },
-  ])
+  const [form, setForm] = useState<VolunteerForm>(emptyVolunteer)
+  const [selected, setSelected] = useState<VolunteerFull | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [editForm, setEditForm] = useState<VolunteerForm>(emptyVolunteer)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null)
+
+  const load = useCallback(() => {
+    setError("")
+    api
+      .get<VolunteerFull[]>("/volunteers?limit=500")
+      .then((rows) => {
+        setVolunteers(rows)
+        // keep an open profile in sync
+        setSelected((current) => (current ? rows.find((row) => row.id === current.id) ?? null : null))
+      })
+      .catch((err) => setError(errorText(err)))
+  }, [])
+
+  useEffect(load, [load])
+
+  const save = async (work: () => Promise<unknown>, text: string, after?: () => void) => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      await work()
+      after?.()
+      setMessage({ kind: "success", text })
+      load()
+    } catch (err) {
+      setMessage({ kind: "error", text: errorText(err) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const addVolunteer = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const name = newVolunteerName.trim()
-    const area = newVolunteerArea.trim()
-    if (!name || !area) return
-    setVolunteers((current) => [
-      {
-        name,
-        initials: name
-          .split(/\s+/)
-          .slice(0, 2)
-          .map((part) => part[0])
-          .join("")
-          .toUpperCase(),
-        area,
-        vehicle: "No vehicle",
-        shifts: "0 pickups",
-        status: "Available",
-      },
-      ...current,
-    ])
-    setNewVolunteerName("")
-    setNewVolunteerArea("")
-    setShowInviteForm(false)
-    setFilter("All volunteers")
-    setSearch("")
+    const name = form.full_name.trim()
+    save(() => api.post("/volunteers", volunteerBody(form)), `Added ${name} to the roster.`, () => {
+      setForm(emptyVolunteer)
+      setShowInviteForm(false)
+      setFilter("All volunteers")
+      setSearch("")
+    })
   }
-  const filteredVolunteers = volunteers.filter((volunteer) => {
-    const matchesFilter =
-      filter === "All volunteers" || volunteer.status === filter
+
+  const openProfile = (volunteer: VolunteerFull) => {
+    setMessage(null)
+    setEditing(false)
+    setSelected(volunteer)
+    setEditForm({
+      full_name: volunteer.full_name,
+      phone: volunteer.phone ?? "",
+      email: volunteer.email ?? "",
+      service_area: volunteer.service_area ?? "",
+      vehicle_type: volunteer.vehicle_type,
+      capacity_kg: volunteer.capacity_kg ? String(Number(volunteer.capacity_kg)) : "",
+    })
+  }
+
+  const saveEdit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!selected) return
+    save(() => api.patch(`/volunteers/${selected.id}`, volunteerBody(editForm)), "Saved.", () => setEditing(false))
+  }
+
+  const toggleDuty = (volunteer: VolunteerFull) =>
+    save(
+      () => api.patch(`/volunteers/${volunteer.id}`, { is_active: !volunteer.is_active }),
+      volunteer.is_active
+        ? `${volunteer.full_name} is off duty and won't be offered for new pickups.`
+        : `${volunteer.full_name} is back on duty.`,
+    )
+
+  const remove = (volunteer: VolunteerFull) => {
+    if (!window.confirm(`Remove ${volunteer.full_name} from the roster? Their past pickups stay in the records.`)) return
+    save(() => api.delete(`/volunteers/${volunteer.id}`), `Removed ${volunteer.full_name}.`, () => setSelected(null))
+  }
+
+  const all = volunteers ?? []
+  const active = all.filter((v) => v.is_active)
+  const areas = new Set(active.map((v) => v.service_area?.trim()).filter(Boolean))
+  const availableToday = all.filter((v) => volunteerToday(v).label === "Available").length
+  const completedThisMonth = all
+    .flatMap((v) => v.pickups)
+    .filter((p) => p.status === "completed" && thisMonth(p.scheduled_at)).length
+  const withVehicle = active.filter((v) => v.vehicle_type !== "none")
+  const vehicleCounts = Object.entries(
+    withVehicle.reduce<Record<string, number>>((counts, v) => {
+      counts[v.vehicle_type] = (counts[v.vehicle_type] ?? 0) + 1
+      return counts
+    }, {}),
+  )
+    .map(([type, count]) => `${count} ${VEHICLES[type as VehicleType].toLowerCase()}${count === 1 ? "" : "s"}`)
+    .join(" · ")
+
+  const filteredVolunteers = all.filter((volunteer) => {
+    const status = volunteerToday(volunteer).label
+    const matchesFilter = filter === "All volunteers" || status === filter
     return (
       matchesFilter &&
-      `${volunteer.name} ${volunteer.area} ${volunteer.vehicle}`
+      `${volunteer.full_name} ${volunteer.service_area ?? ""} ${vehicleText(volunteer)} ${volunteer.phone ?? ""}`
         .toLowerCase()
         .includes(search.toLowerCase())
     )
   })
 
+  const fields = (value: VolunteerForm, change: (next: VolunteerForm) => void) => (
+    <>
+      <label>
+        Full name
+        <input
+          required
+          value={value.full_name}
+          onChange={(event) => change({ ...value, full_name: event.target.value })}
+          placeholder="e.g. Alex Rivera"
+        />
+      </label>
+      <label>
+        Mobile number
+        <input
+          type="tel"
+          value={value.phone}
+          onChange={(event) => change({ ...value, phone: event.target.value })}
+          placeholder="09XX XXX XXXX"
+        />
+      </label>
+      <label>
+        Service area
+        <input
+          value={value.service_area}
+          onChange={(event) => change({ ...value, service_area: event.target.value })}
+          placeholder="e.g. Quezon City"
+        />
+      </label>
+      <label>
+        Vehicle
+        <select
+          value={value.vehicle_type}
+          onChange={(event) => change({ ...value, vehicle_type: event.target.value as VehicleType })}
+        >
+          {Object.entries(VEHICLES).map(([type, name]) => (
+            <option key={type} value={type}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {value.vehicle_type !== "none" && (
+        <label>
+          Can carry (kg)
+          <input
+            type="number"
+            min="0"
+            value={value.capacity_kg}
+            onChange={(event) => change({ ...value, capacity_kg: event.target.value })}
+            placeholder="e.g. 300"
+          />
+        </label>
+      )}
+    </>
+  )
+
   return (
-    <AppShell go={go} active="volunteers" title="Volunteers">
+    <AppShell go={go} active="volunteers" title="Volunteers" live>
       <main className="dashboard-main">
         <section className="page-heading">
           <div>
@@ -2531,75 +2674,81 @@ function VolunteersScreen({ go }: { go: (s: Screen) => void }) {
             <h1>Volunteers</h1>
             <p>Drivers and helpers who move food from farms to tables.</p>
           </div>
-          <button
-            type="button"
-            className="primary-action"
-            onClick={() => setShowInviteForm((open) => !open)}
-          >
-            {showInviteForm ? "Cancel" : "+ Invite volunteer"}
-          </button>
+          {canManage && (
+            <button
+              type="button"
+              className="primary-action"
+              onClick={() => {
+                setMessage(null)
+                setShowInviteForm((open) => !open)
+              }}
+            >
+              {showInviteForm ? "Cancel" : "+ Add volunteer"}
+            </button>
+          )}
         </section>
+
+        {error && (
+          <div className="load-error" role="alert">
+            <span>{error}</span>
+            <button type="button" className="quiet-action" onClick={load}>
+              Try again
+            </button>
+          </div>
+        )}
+
         <PageMetrics
           items={[
             {
               label: "Active volunteers",
-              value: "18",
-              detail: "Across 6 districts",
+              value: volunteers ? String(active.length) : "…",
+              detail: areas.size ? `Across ${areas.size} ${areas.size === 1 ? "area" : "areas"}` : "On the roster",
               icon: "users",
               tone: "lime",
             },
             {
               label: "Available today",
-              value: "7",
+              value: volunteers ? String(availableToday) : "…",
               detail: "Ready for assignments",
               icon: "clock",
               tone: "mint",
             },
             {
               label: "Pickups completed",
-              value: "142",
+              value: volunteers ? String(completedThisMonth) : "…",
               detail: "This month",
               icon: "truck",
               tone: "cream",
             },
             {
               label: "Has a vehicle",
-              value: "12",
-              detail: "6 vans · 6 cars",
+              value: volunteers ? String(withVehicle.length) : "…",
+              detail: vehicleCounts || "No vehicles yet",
               icon: "home",
               tone: "lime",
             },
           ]}
         />
+
+        {message && !selected && (
+          <p className={`page-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>
+            {message.text}
+          </p>
+        )}
+
         {showInviteForm && (
-          <form className="inline-form" onSubmit={addVolunteer}>
+          <form className="inline-form ops-form" onSubmit={addVolunteer}>
             <div>
               <p className="eyebrow">New volunteer</p>
-              <strong>Add a roster entry</strong>
+              <strong>Add to the roster</strong>
             </div>
-            <label>
-              Full name
-              <input
-                required
-                value={newVolunteerName}
-                onChange={(event) => setNewVolunteerName(event.target.value)}
-                placeholder="e.g. Alex Rivera"
-              />
-            </label>
-            <label>
-              Service area
-              <input
-                required
-                value={newVolunteerArea}
-                onChange={(event) => setNewVolunteerArea(event.target.value)}
-                placeholder="e.g. North District"
-              />
-            </label>
-            <button type="submit" className="primary-action">
-              Add volunteer
+            {fields(form, setForm)}
+            <button type="submit" className="primary-action" disabled={saving}>
+              {saving ? "Adding..." : "Add volunteer"}
             </button>
           </form>
         )}
+
         <section className="panel records-panel">
           <div className="records-heading">
             <div>
@@ -2609,7 +2758,7 @@ function VolunteersScreen({ go }: { go: (s: Screen) => void }) {
               </h2>
             </div>
             <span className="date-chip">
-              <i className="availability-dot" /> 7 available today
+              <i className="availability-dot" /> {volunteers ? availableToday : "…"} available today
             </span>
           </div>
           <ListToolbar
@@ -2629,49 +2778,42 @@ function VolunteersScreen({ go }: { go: (s: Screen) => void }) {
                 <span>Today</span>
                 <span></span>
               </div>
-              {filteredVolunteers.map((volunteer) => (
-                <div className="record-row" key={volunteer.name}>
-                  <div className="record-primary">
-                    <span className="initial-avatar">{volunteer.initials}</span>
-                    <div>
-                      <strong>{volunteer.name}</strong>
-                      <small>Verified volunteer</small>
+              {filteredVolunteers.map((volunteer) => {
+                const status = volunteerToday(volunteer)
+                const done = volunteer.pickups.filter((p) => p.status === "completed").length
+                return (
+                  <div className="record-row" key={volunteer.id}>
+                    <div className="record-primary">
+                      <span className="initial-avatar">{initials(volunteer.full_name)}</span>
+                      <div>
+                        <strong>{volunteer.full_name}</strong>
+                        <small>{volunteer.phone ?? "No phone yet"}</small>
+                      </div>
                     </div>
+                    <span>{volunteer.service_area || "—"}</span>
+                    <span>{vehicleText(volunteer)}</span>
+                    <span>
+                      {done} {done === 1 ? "pickup" : "pickups"}
+                    </span>
+                    <StatusPill label={status.label} tone={status.tone} />
+                    <button type="button" className="row-action" onClick={() => openProfile(volunteer)}>
+                      View profile
+                    </button>
                   </div>
-                  <span>{volunteer.area}</span>
-                  <span>{volunteer.vehicle}</span>
-                  <span>{volunteer.shifts}</span>
-                  <StatusPill
-                    label={volunteer.status}
-                    tone={
-                      volunteer.status === "Available"
-                        ? "green"
-                        : volunteer.status === "On a pickup"
-                          ? "blue"
-                          : "dark"
-                    }
-                  />
-                  <button
-                    type="button"
-                    className="row-action"
-                    onClick={() => setSelectedVolunteer(volunteer)}
-                  >
-                    View profile
-                  </button>
-                </div>
-              ))}
-              {filteredVolunteers.length === 0 && (
-                <p className="empty-state">No volunteers match your search.</p>
+                )
+              })}
+              {volunteers && filteredVolunteers.length === 0 && (
+                <p className="empty-state">
+                  {all.length ? "No volunteers match your search." : "No volunteers yet. Add the first one above."}
+                </p>
               )}
+              {!volunteers && !error && <p className="empty-state">Loading…</p>}
             </div>
           </div>
         </section>
-        {selectedVolunteer && (
-          <div
-            className="detail-backdrop"
-            role="presentation"
-            onClick={() => setSelectedVolunteer(null)}
-          >
+
+        {selected && (
+          <div className="detail-backdrop" role="presentation" onClick={() => setSelected(null)}>
             <section
               className="detail-dialog"
               role="dialog"
@@ -2683,43 +2825,99 @@ function VolunteersScreen({ go }: { go: (s: Screen) => void }) {
                 type="button"
                 className="detail-close"
                 aria-label="Close volunteer profile"
-                onClick={() => setSelectedVolunteer(null)}
+                onClick={() => setSelected(null)}
               >
                 ×
               </button>
-              <span className="initial-avatar">
-                {selectedVolunteer.initials}
-              </span>
+              <span className="initial-avatar">{initials(selected.full_name)}</span>
               <p className="eyebrow">Volunteer profile</p>
-              <h2 id="volunteer-detail-title">{selectedVolunteer.name}</h2>
-              <dl>
-                <div>
-                  <dt>Service area</dt>
-                  <dd>{selectedVolunteer.area}</dd>
-                </div>
-                <div>
-                  <dt>Vehicle capacity</dt>
-                  <dd>{selectedVolunteer.vehicle}</dd>
-                </div>
-                <div>
-                  <dt>Contribution</dt>
-                  <dd>{selectedVolunteer.shifts}</dd>
-                </div>
-                <div>
-                  <dt>Availability</dt>
-                  <dd>{selectedVolunteer.status}</dd>
-                </div>
-              </dl>
-              <button
-                type="button"
-                className="primary-action"
-                onClick={() => {
-                  setSelectedVolunteer(null)
-                  go("pickups")
-                }}
-              >
-                View pickup schedule
-              </button>
+              <h2 id="volunteer-detail-title">{selected.full_name}</h2>
+              {editing ? (
+                <form className="dialog-form" onSubmit={saveEdit}>
+                  {fields(editForm, setEditForm)}
+                  <label>
+                    Email
+                    <input
+                      type="email"
+                      value={editForm.email}
+                      onChange={(event) => setEditForm({ ...editForm, email: event.target.value })}
+                      placeholder="name@example.com"
+                    />
+                  </label>
+                  <div className="dialog-actions">
+                    <button type="submit" className="primary-action" disabled={saving}>
+                      {saving ? "Saving..." : "Save changes"}
+                    </button>
+                    <button type="button" className="outline-action" onClick={() => setEditing(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <>
+                  <dl>
+                    <div>
+                      <dt>Service area</dt>
+                      <dd>{selected.service_area || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt>Vehicle capacity</dt>
+                      <dd>{vehicleText(selected)}</dd>
+                    </div>
+                    <div>
+                      <dt>Contribution</dt>
+                      <dd>{selected.pickups.filter((p) => p.status === "completed").length} pickups</dd>
+                    </div>
+                    <div>
+                      <dt>Today</dt>
+                      <dd>{volunteerToday(selected).label}</dd>
+                    </div>
+                    <div>
+                      <dt>Mobile</dt>
+                      <dd>{selected.phone || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt>Email</dt>
+                      <dd>{selected.email || "—"}</dd>
+                    </div>
+                  </dl>
+                  <div className="dialog-actions">
+                    <button
+                      type="button"
+                      className="primary-action"
+                      onClick={() => {
+                        setSelected(null)
+                        go("pickups")
+                      }}
+                    >
+                      View pickup schedule
+                    </button>
+                    {canManage && (
+                      <>
+                        <button type="button" className="outline-action" onClick={() => setEditing(true)}>
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="outline-action"
+                          disabled={saving}
+                          onClick={() => toggleDuty(selected)}
+                        >
+                          {selected.is_active ? "Set off duty" : "Set on duty"}
+                        </button>
+                        <button type="button" className="row-action danger" disabled={saving} onClick={() => remove(selected)}>
+                          Remove
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+              {message && (
+                <p className={`form-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>
+                  {message.text}
+                </p>
+              )}
             </section>
           </div>
         )}
@@ -2729,100 +2927,246 @@ function VolunteersScreen({ go }: { go: (s: Screen) => void }) {
 }
 
 // ── Recipients Screen ─────────────────────────────────────────────────────────
+type RecipientType = "food_bank" | "kitchen" | "pantry" | "shelter" | "rescue_partner" | "other"
+type RecipientStatus = "open" | "limited" | "closed"
+
+type RecipientFull = RecipientRecord & {
+  type: RecipientType
+  contact_name: string | null
+  phone: string | null
+  capacity: string | null
+  needs: string | null
+  status: RecipientStatus
+  donations: { quantity_kg: number | string; status: DonationStatus; delivered_at: string | null }[]
+}
+
+const RECIPIENT_TYPES: Record<RecipientType, string> = {
+  food_bank: "Food bank",
+  kitchen: "Community kitchen",
+  pantry: "Neighborhood pantry",
+  shelter: "Community shelter",
+  rescue_partner: "Food rescue partner",
+  other: "Community partner",
+}
+
+const RECIPIENT_STATUS: Record<RecipientStatus, { label: string; tone: ActivityTone }> = {
+  open: { label: "Open", tone: "green" },
+  limited: { label: "Limited capacity", tone: "amber" },
+  closed: { label: "Closed", tone: "dark" },
+}
+
+type RecipientForm = {
+  name: string
+  type: RecipientType
+  address: string
+  contact_name: string
+  phone: string
+  capacity: string
+  needs: string
+  status: RecipientStatus
+}
+
+const emptyRecipient: RecipientForm = {
+  name: "",
+  type: "food_bank",
+  address: "",
+  contact_name: "",
+  phone: "",
+  capacity: "",
+  needs: "",
+  status: "open",
+}
+
+function recipientBody(form: RecipientForm) {
+  const clean = (value: string) => value.trim() || null
+  return {
+    name: form.name.trim(),
+    type: form.type,
+    address: clean(form.address),
+    contact_name: clean(form.contact_name),
+    phone: clean(form.phone),
+    capacity: clean(form.capacity),
+    needs: clean(form.needs),
+    status: form.status,
+  }
+}
+
 function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
+  const { account } = useSession()
+  const canManage = canManageOps(account)
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState("All recipients")
+  const [recipients, setRecipients] = useState<RecipientFull[] | null>(null)
+  const [error, setError] = useState("")
   const [showAddForm, setShowAddForm] = useState(false)
-  const [newRecipientName, setNewRecipientName] = useState("")
-  const [newRecipientArea, setNewRecipientArea] = useState("")
-  const [recipients, setRecipients] = useState([
-    {
-      name: "Hope Kitchen",
-      initials: "HK",
-      type: "Community kitchen",
-      area: "North District",
-      people: "120 meals / day",
-      needs: "Fruit, vegetables",
-      status: "Open",
-    },
-    {
-      name: "Food Bank 1",
-      initials: "FB",
-      type: "Food bank",
-      area: "Central",
-      people: "350 households",
-      needs: "Root vegetables",
-      status: "Open",
-    },
-    {
-      name: "City Pantry",
-      initials: "CP",
-      type: "Neighborhood pantry",
-      area: "East Valley",
-      people: "80 households",
-      needs: "Fresh produce",
-      status: "Open",
-    },
-    {
-      name: "Second Harvest",
-      initials: "SH",
-      type: "Food rescue partner",
-      area: "Riverside",
-      people: "200 meals / day",
-      needs: "Leafy greens",
-      status: "Limited capacity",
-    },
-    {
-      name: "Sunrise Shelter",
-      initials: "SS",
-      type: "Community shelter",
-      area: "South District",
-      people: "60 residents",
-      needs: "Seasonal produce",
-      status: "Open",
-    },
-  ])
+  const [form, setForm] = useState<RecipientForm>(emptyRecipient)
+  const [selected, setSelected] = useState<RecipientFull | null>(null)
+  const [editForm, setEditForm] = useState<RecipientForm>(emptyRecipient)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null)
+
+  const load = useCallback(() => {
+    setError("")
+    api
+      .get<RecipientFull[]>("/recipients?limit=500")
+      .then(setRecipients)
+      .catch((err) => setError(errorText(err)))
+  }, [])
+
+  useEffect(load, [load])
+
+  const save = async (work: () => Promise<unknown>, text: string, after?: () => void) => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      await work()
+      after?.()
+      setMessage({ kind: "success", text })
+      load()
+    } catch (err) {
+      setMessage({ kind: "error", text: errorText(err) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const addRecipient = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const name = newRecipientName.trim()
-    const area = newRecipientArea.trim()
-    if (!name || !area) return
-    setRecipients((current) => [
-      {
-        name,
-        initials: name
-          .split(/\s+/)
-          .slice(0, 2)
-          .map((part) => part[0])
-          .join("")
-          .toUpperCase(),
-        type: "Community partner",
-        area,
-        people: "To be confirmed",
-        needs: "Fresh produce",
-        status: "Open",
-      },
-      ...current,
-    ])
-    setNewRecipientName("")
-    setNewRecipientArea("")
-    setShowAddForm(false)
-    setFilter("All recipients")
-    setSearch("")
+    const name = form.name.trim()
+    save(() => api.post("/recipients", recipientBody(form)), `Added ${name}. It now appears when matching donations.`, () => {
+      setForm(emptyRecipient)
+      setShowAddForm(false)
+      setFilter("All recipients")
+      setSearch("")
+    })
   }
-  const filteredRecipients = recipients.filter((recipient) => {
-    const matchesFilter =
-      filter === "All recipients" || recipient.status === filter
+
+  const openEdit = (recipient: RecipientFull) => {
+    setMessage(null)
+    setSelected(recipient)
+    setEditForm({
+      name: recipient.name,
+      type: recipient.type,
+      address: recipient.address ?? "",
+      contact_name: recipient.contact_name ?? "",
+      phone: recipient.phone ?? "",
+      capacity: recipient.capacity ?? "",
+      needs: recipient.needs ?? "",
+      status: recipient.status,
+    })
+  }
+
+  const saveEdit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!selected) return
+    save(() => api.patch(`/recipients/${selected.id}`, recipientBody(editForm)), `Saved ${editForm.name.trim()}.`, () =>
+      setSelected(null),
+    )
+  }
+
+  const remove = (recipient: RecipientFull) => {
+    if (!window.confirm(`Remove ${recipient.name}? This can't be undone.`)) return
+    save(() => api.delete(`/recipients/${recipient.id}`), `Removed ${recipient.name}.`, () => setSelected(null))
+  }
+
+  const all = recipients ?? []
+  const areas = new Set(all.map((r) => r.address?.trim()).filter(Boolean))
+  const delivered = all.flatMap((r) => r.donations).filter((d) => d.status === "delivered")
+  const kgReceived = delivered.reduce((sum, d) => sum + Number(d.quantity_kg), 0)
+  const openCount = all.filter((r) => r.status === "open").length
+  const limitedCount = all.filter((r) => r.status === "limited").length
+  const deliveriesThisMonth = delivered.filter((d) => thisMonth(d.delivered_at)).length
+
+  const filteredRecipients = all.filter((recipient) => {
+    const status = RECIPIENT_STATUS[recipient.status].label
+    const matchesFilter = filter === "All recipients" || status === filter
     return (
       matchesFilter &&
-      `${recipient.name} ${recipient.type} ${recipient.area} ${recipient.needs}`
+      `${recipient.name} ${RECIPIENT_TYPES[recipient.type]} ${recipient.address ?? ""} ${recipient.needs ?? ""}`
         .toLowerCase()
         .includes(search.toLowerCase())
     )
   })
 
+  const fields = (value: RecipientForm, change: (next: RecipientForm) => void, full: boolean) => (
+    <>
+      <label>
+        Organization name
+        <input
+          required
+          value={value.name}
+          onChange={(event) => change({ ...value, name: event.target.value })}
+          placeholder="e.g. Community Pantry"
+        />
+      </label>
+      <label>
+        Partner type
+        <select value={value.type} onChange={(event) => change({ ...value, type: event.target.value as RecipientType })}>
+          {Object.entries(RECIPIENT_TYPES).map(([type, name]) => (
+            <option key={type} value={type}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Location
+        <input
+          value={value.address}
+          onChange={(event) => change({ ...value, address: event.target.value })}
+          placeholder="e.g. Sampaloc, Manila"
+        />
+      </label>
+      <label>
+        Priority needs
+        <input
+          value={value.needs}
+          onChange={(event) => change({ ...value, needs: event.target.value })}
+          placeholder="e.g. Fresh produce"
+        />
+      </label>
+      {full && (
+        <>
+          <label>
+            Capacity
+            <input
+              value={value.capacity}
+              onChange={(event) => change({ ...value, capacity: event.target.value })}
+              placeholder="e.g. 120 meals / day"
+            />
+          </label>
+          <label>
+            Contact person
+            <input
+              value={value.contact_name}
+              onChange={(event) => change({ ...value, contact_name: event.target.value })}
+              placeholder="Name"
+            />
+          </label>
+          <label>
+            Contact number
+            <input
+              type="tel"
+              value={value.phone}
+              onChange={(event) => change({ ...value, phone: event.target.value })}
+              placeholder="09XX XXX XXXX"
+            />
+          </label>
+          <label>
+            Status
+            <select value={value.status} onChange={(event) => change({ ...value, status: event.target.value as RecipientStatus })}>
+              <option value="open">Open</option>
+              <option value="limited">Limited capacity</option>
+              <option value="closed">Closed (hide from matching)</option>
+            </select>
+          </label>
+        </>
+      )}
+    </>
+  )
+
   return (
-    <AppShell go={go} active="recipients" title="Recipients">
+    <AppShell go={go} active="recipients" title="Recipients" live>
       <main className="dashboard-main">
         <section className="page-heading">
           <div>
@@ -2830,75 +3174,81 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
             <h1>Recipients</h1>
             <p>Food banks, kitchens, and pantries that receive donations.</p>
           </div>
-          <button
-            type="button"
-            className="primary-action"
-            onClick={() => setShowAddForm((open) => !open)}
-          >
-            {showAddForm ? "Cancel" : "+ Add recipient"}
-          </button>
+          {canManage && (
+            <button
+              type="button"
+              className="primary-action"
+              onClick={() => {
+                setMessage(null)
+                setShowAddForm((open) => !open)
+              }}
+            >
+              {showAddForm ? "Cancel" : "+ Add recipient"}
+            </button>
+          )}
         </section>
+
+        {error && (
+          <div className="load-error" role="alert">
+            <span>{error}</span>
+            <button type="button" className="quiet-action" onClick={load}>
+              Try again
+            </button>
+          </div>
+        )}
+
         <PageMetrics
           items={[
             {
               label: "Community partners",
-              value: "12",
-              detail: "Across 6 districts",
+              value: recipients ? String(all.length) : "…",
+              detail: areas.size ? `Across ${areas.size} ${areas.size === 1 ? "area" : "areas"}` : "In the network",
               icon: "home",
               tone: "lime",
             },
             {
-              label: "People supported",
-              value: "2,840",
-              detail: "Estimated each week",
-              icon: "users",
+              label: "Food received",
+              value: recipients ? `${formatKg(kgReceived)} kg` : "…",
+              detail: `From ${delivered.length} deliveries`,
+              icon: "leaf",
               tone: "mint",
             },
             {
               label: "Open to donations",
-              value: "10",
-              detail: "2 at limited capacity",
+              value: recipients ? String(openCount + limitedCount) : "…",
+              detail: `${limitedCount} at limited capacity`,
               icon: "gift",
               tone: "cream",
             },
             {
-              label: "Meals delivered",
-              value: "6,420",
+              label: "Deliveries",
+              value: recipients ? String(deliveriesThisMonth) : "…",
               detail: "This month",
-              icon: "leaf",
+              icon: "truck",
               tone: "lime",
             },
           ]}
         />
+
+        {message && !selected && (
+          <p className={`page-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>
+            {message.text}
+          </p>
+        )}
+
         {showAddForm && (
-          <form className="inline-form" onSubmit={addRecipient}>
+          <form className="inline-form ops-form" onSubmit={addRecipient}>
             <div>
               <p className="eyebrow">New partner</p>
               <strong>Add a recipient</strong>
             </div>
-            <label>
-              Organization name
-              <input
-                required
-                value={newRecipientName}
-                onChange={(event) => setNewRecipientName(event.target.value)}
-                placeholder="e.g. Community Pantry"
-              />
-            </label>
-            <label>
-              Location
-              <input
-                required
-                value={newRecipientArea}
-                onChange={(event) => setNewRecipientArea(event.target.value)}
-                placeholder="e.g. Central District"
-              />
-            </label>
-            <button type="submit" className="primary-action">
-              Add recipient
+            {fields(form, setForm, false)}
+            <button type="submit" className="primary-action" disabled={saving}>
+              {saving ? "Adding..." : "Add recipient"}
             </button>
           </form>
         )}
+
         <section className="panel records-panel">
           <div className="records-heading">
             <div>
@@ -2907,23 +3257,19 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
                 Recipient network <span>{filteredRecipients.length}</span>
               </h2>
             </div>
-            <button
-              type="button"
-              className="quiet-action"
-              onClick={() => setFilter("Open")}
-            >
+            <button type="button" className="quiet-action" onClick={() => setFilter("Open")}>
               Show open partners
             </button>
           </div>
           <ListToolbar
             search={search}
             onSearch={setSearch}
-            filters={["All recipients", "Open", "Limited capacity"]}
+            filters={["All recipients", "Open", "Limited capacity", "Closed"]}
             activeFilter={filter}
             onFilter={setFilter}
           />
           <div className="table-scroll">
-            <div className="record-table recipients-table">
+            <div className={`record-table recipients-table ${canManage ? "with-actions" : ""}`}>
               <div className="record-table-head">
                 <span>Organization</span>
                 <span>Partner type</span>
@@ -2931,34 +3277,91 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
                 <span>Capacity</span>
                 <span>Priority needs</span>
                 <span>Status</span>
+                {canManage && <span></span>}
               </div>
-              {filteredRecipients.map((recipient) => (
-                <div className="record-row" key={recipient.name}>
-                  <div className="record-primary">
-                    <span className="initial-avatar recipient-avatar">
-                      {recipient.initials}
-                    </span>
-                    <div>
-                      <strong>{recipient.name}</strong>
-                      <small>Verified partner</small>
+              {filteredRecipients.map((recipient) => {
+                const status = RECIPIENT_STATUS[recipient.status]
+                const received = recipient.donations
+                  .filter((d) => d.status === "delivered")
+                  .reduce((sum, d) => sum + Number(d.quantity_kg), 0)
+                return (
+                  <div className="record-row" key={recipient.id}>
+                    <div className="record-primary">
+                      <span className="initial-avatar recipient-avatar">{initials(recipient.name)}</span>
+                      <div>
+                        <strong>{recipient.name}</strong>
+                        <small>{received ? `${formatKg(received)} kg received` : "No deliveries yet"}</small>
+                      </div>
                     </div>
+                    <span>{RECIPIENT_TYPES[recipient.type]}</span>
+                    <span title={recipient.address ?? ""}>{recipient.address || "—"}</span>
+                    <span>{recipient.capacity || "—"}</span>
+                    <span title={recipient.needs ?? ""}>{recipient.needs || "—"}</span>
+                    <StatusPill label={status.label} tone={status.tone} />
+                    {canManage && (
+                      <button type="button" className="row-action" onClick={() => openEdit(recipient)}>
+                        Edit
+                      </button>
+                    )}
                   </div>
-                  <span>{recipient.type}</span>
-                  <span>{recipient.area}</span>
-                  <span>{recipient.people}</span>
-                  <span>{recipient.needs}</span>
-                  <StatusPill
-                    label={recipient.status}
-                    tone={recipient.status === "Open" ? "green" : "amber"}
-                  />
-                </div>
-              ))}
-              {filteredRecipients.length === 0 && (
-                <p className="empty-state">No recipients match your search.</p>
+                )
+              })}
+              {recipients && filteredRecipients.length === 0 && (
+                <p className="empty-state">
+                  {all.length ? "No recipients match your search." : "No recipients yet. Add a food bank above."}
+                </p>
               )}
+              {!recipients && !error && <p className="empty-state">Loading…</p>}
             </div>
           </div>
         </section>
+
+        {selected && (
+          <div className="detail-backdrop" role="presentation" onClick={() => setSelected(null)}>
+            <section
+              className="detail-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="recipient-edit-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="detail-close"
+                aria-label="Close"
+                onClick={() => setSelected(null)}
+              >
+                ×
+              </button>
+              <span className="initial-avatar recipient-avatar">{initials(selected.name)}</span>
+              <p className="eyebrow">Edit recipient</p>
+              <h2 id="recipient-edit-title">{selected.name}</h2>
+              <form className="dialog-form" onSubmit={saveEdit}>
+                {fields(editForm, setEditForm, true)}
+                <div className="dialog-actions">
+                  <button type="submit" className="primary-action" disabled={saving}>
+                    {saving ? "Saving..." : "Save changes"}
+                  </button>
+                  <button type="button" className="outline-action" onClick={() => setSelected(null)}>
+                    Cancel
+                  </button>
+                  {selected.donations.length === 0 ? (
+                    <button type="button" className="row-action danger" disabled={saving} onClick={() => remove(selected)}>
+                      Remove
+                    </button>
+                  ) : (
+                    <small className="dialog-note">Has donations, so it can't be removed. Set it to Closed instead.</small>
+                  )}
+                </div>
+              </form>
+              {message && (
+                <p className={`form-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>
+                  {message.text}
+                </p>
+              )}
+            </section>
+          </div>
+        )}
       </main>
     </AppShell>
   )

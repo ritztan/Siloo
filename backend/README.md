@@ -33,7 +33,8 @@ backend/
 ├── supabase/
 │   ├── migrations/
 │   │   ├── 20261027000000_init_schema.sql      ← tables, security rules, views
-│   │   └── 20261027100000_farmer_accounts.sql  ← farmer sign-up + farmer-only rules
+│   │   ├── 20261027100000_farmer_accounts.sql  ← farmer sign-up + farmer-only rules
+│   │   └── 20261027200000_volunteer_recipient_details.sql  ← vehicle, service area, capacity, needs
 │   ├── move_old_tables.sql   ← only if the project already had older Silo tables
 │   └── seed.sql              ← sample data
 ├── tests/test_smoke.py
@@ -49,7 +50,8 @@ In Supabase → **SQL Editor**, run each file in its own **New query**, in this 
 
 1. `supabase/migrations/20261027000000_init_schema.sql`
 2. `supabase/migrations/20261027100000_farmer_accounts.sql`
-3. (Optional) `supabase/seed.sql` for sample data
+3. `supabase/migrations/20261027200000_volunteer_recipient_details.sql`
+4. (Optional) `supabase/seed.sql` for sample data
 
 Then go to **Authentication → Sign In / Providers → Email** and turn off **Confirm email** while testing. Otherwise new accounts must click a link in their email before they can log in.
 
@@ -112,7 +114,7 @@ npm run dev
 
 Open **http://localhost:5173**. The website talks to the API at `http://127.0.0.1:8000`. To use a different address, create `OLIS/.env` with `VITE_API_URL=...`. If the website runs somewhere other than port 5173 or 8443, add it to `CORS_ORIGINS` in `backend/.env`.
 
-**What's connected so far:** farmer sign-up, both logins, the farmer status page and farmer dashboard, the coordinator Dashboard, and the Farmers page (approve / reject / suspend). Pages that still show sample data say so in the top bar.
+**What's connected so far:** farmer sign-up, both logins, the farmer status page and farmer dashboard, and the coordinator Dashboard, Donations, Pickups, Farmers, Volunteers and Recipients pages. Reports still shows sample data (the top bar says so).
 
 ## Endpoints
 

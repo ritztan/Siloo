@@ -526,3 +526,19 @@ h1:before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; bord
 .page-message.error { color: #8c3527; background: #fdf3f0; }
 .donations-table.with-actions .record-table-head, .donations-table.with-actions .record-row { grid-template-columns: minmax(190px, 1.6fr) .6fr 1fr 1.1fr .8fr 120px; }
 .pickups-table .record-table-head, .pickups-table .record-row { grid-template-columns: minmax(200px, 1.45fr) 1.2fr 1fr .9fr 1fr 110px; }
+
+/* Volunteers & Recipients (live) */
+.recipients-table.with-actions .record-table-head, .recipients-table.with-actions .record-row { grid-template-columns: minmax(180px, 1.35fr) 1fr .9fr .9fr 1fr .9fr 50px; }
+.dialog-form { margin: 18px 0 4px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.dialog-form label { display: grid; gap: 6px; color: var(--muted); font-size: 9px; font-weight: 700; }
+.dialog-form input, .dialog-form select { width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 5px; outline: 0; color: var(--forest); background: white; font: inherit; font-size: 10px; }
+.dialog-form input:focus, .dialog-form select:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(36,115,86,.08); }
+.dialog-actions { grid-column: 1 / -1; margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.dialog-actions .primary-action { min-height: 38px; padding: 0 14px; }
+.dialog-actions .row-action.danger { margin-left: auto; }
+.dialog-note { margin-left: auto; max-width: 170px; color: var(--muted); font-size: 8px; line-height: 1.4; }
+.detail-dialog { max-height: calc(100vh - 40px); overflow-y: auto; }
+.detail-dialog .form-message { margin: 12px 0 0; font-size: 9px; }
+.detail-dialog .form-message.error { color: #a33a2a; }
+.detail-dialog .form-message.success { color: var(--green); }
+@media (max-width: 470px) { .dialog-form { grid-template-columns: 1fr; } }

@@ -7,6 +7,13 @@
 node_modules/
 dist/
 
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # Supabase CLI local files
 backend/supabase/.temp/
 backend/supabase/.branches/

@@ -1,0 +1,31 @@
+"""Settings loaded from backend/.env (see .env.example)."""
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+
+def _require(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"Missing {name}. Copy backend/.env.example to backend/.env and fill it in."
+        )
+    return value
+
+
+SUPABASE_URL = _require("SUPABASE_URL")
+SUPABASE_ANON_KEY = _require("SUPABASE_ANON_KEY")
+
+# Comma-separated list of websites allowed to call this API.
+# Default covers the Vite dev server.
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS", "http://localhost:5173,http://localhost:8443"
+    ).split(",")
+    if origin.strip()
+]

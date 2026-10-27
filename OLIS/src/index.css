@@ -513,3 +513,16 @@ h1:before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; bord
 .farmer-status-card .status-facts dt { color: var(--muted); }
 .farmer-status-card .status-facts dd { margin: 0; color: var(--forest); font-weight: 700; text-align: right; }
 .farmer-status-card .status-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* Donations & Pickups (live) */
+.inline-form select { width: 100%; height: 38px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; outline: 0; color: var(--forest); background: white; font: inherit; font-size: 10px; }
+.inline-form select:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(36,115,86,.08); }
+.inline-form.ops-form { flex-wrap: wrap; }
+.inline-form.ops-form label { flex: 1 1 170px; }
+.inline-form .form-sub { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; }
+.inline-form .form-extra-actions { flex-basis: 100%; display: flex; gap: 16px; }
+.page-message { margin: 0 0 14px; padding: 11px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-radius: 9px; font-size: 10px; line-height: 1.5; }
+.page-message.success { color: var(--green); background: #e7f1ea; }
+.page-message.error { color: #8c3527; background: #fdf3f0; }
+.donations-table.with-actions .record-table-head, .donations-table.with-actions .record-row { grid-template-columns: minmax(190px, 1.6fr) .6fr 1fr 1.1fr .8fr 120px; }
+.pickups-table .record-table-head, .pickups-table .record-row { grid-template-columns: minmax(200px, 1.45fr) 1.2fr 1fr .9fr 1fr 110px; }

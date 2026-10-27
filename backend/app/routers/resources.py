@@ -70,7 +70,10 @@ donations = crud_router(
     table="donations", prefix="/donations", label="Donation",
     create_model=DonationIn, update_model=DonationUpdate,
     search_column="produce", has_status=True,
-    select="*, farmer:farmers(id, farm_name), recipient:recipients(id, name)",
+    select=(
+        "*, farmer:farmers(id, farm_name), recipient:recipients(id, name), "
+        "pickups(id, scheduled_at, status, volunteer_id)"
+    ),
 )
 
 # ---------- pickups ----------
@@ -138,6 +141,18 @@ def update_pickup(pickup_id: UUID, body: PickupUpdate, db: Client = Depends(get_
             .update({"status": "delivered", "delivered_at": datetime.now(timezone.utc).isoformat()})
             .eq("id", pickup["donation_id"])
         )
+    elif changes.get("status") == "cancelled":
+        # No other pickup planned for this donation? Put it back to "matched" so it can be rescheduled.
+        others = run(
+            db.table("pickups").select("id")
+            .eq("donation_id", pickup["donation_id"])
+            .in_("status", ["scheduled", "in_progress"])
+        )
+        if not others:
+            run(
+                db.table("donations").update({"status": "matched"})
+                .eq("id", pickup["donation_id"]).eq("status", "pickup_scheduled")
+            )
     return pickup
 
 

@@ -1366,95 +1366,197 @@ function StatusPill({
   return <span className={`status ${tone}`}>{label}</span>
 }
 
+// ── Shared records for the operations pages ───────────────────────────────────
+type DonationRecord = {
+  id: string
+  produce: string
+  quantity_kg: number | string
+  status: DonationStatus
+  expires_at: string | null
+  delivered_at: string | null
+  notes: string | null
+  created_at: string
+  farmer: { id: string; farm_name: string } | null
+  recipient: { id: string; name: string } | null
+  pickups: { id: string; scheduled_at: string; status: string; volunteer_id: string | null }[]
+}
+
+type RecipientRecord = { id: string; name: string; type: string; address: string | null }
+type VolunteerRecord = { id: string; full_name: string; phone: string | null; is_active: boolean }
+
+const canManageOps = (account: Account | null) =>
+  account?.profile.role === "admin" || account?.profile.role === "coordinator"
+
+const nextPickup = (donation: DonationRecord) =>
+  donation.pickups
+    .filter((pickup) => pickup.status === "scheduled" || pickup.status === "in_progress")
+    .sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at))[0]
+
+// <input type="datetime-local"> value for "now + hours", rounded to the half hour
+function localDateTime(hoursFromNow = 0) {
+  const date = new Date(Date.now() + hoursFromNow * 3600_000)
+  date.setMinutes(date.getMinutes() < 30 ? 30 : 60, 0, 0)
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+const thisMonth = (iso: string | null) => {
+  if (!iso) return false
+  const date = new Date(iso)
+  const now = new Date()
+  return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear()
+}
+
 // ── Donations Screen ──────────────────────────────────────────────────────────
 function DonationsScreen({ go }: { go: (s: Screen) => void }) {
+  const { account } = useSession()
+  const canManage = canManageOps(account)
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState("All")
-  const [showForm, setShowForm] = useState(false)
+  const [donations, setDonations] = useState<DonationRecord[] | null>(null)
+  const [farms, setFarms] = useState<Farm[]>([])
+  const [recipients, setRecipients] = useState<RecipientRecord[]>([])
+  const [volunteers, setVolunteers] = useState<VolunteerRecord[]>([])
+  const [error, setError] = useState("")
+  // Which form is open: logging a new donation, or acting on one donation
+  const [panel, setPanel] = useState<
+    | { kind: "log" }
+    | { kind: "match"; donation: DonationRecord }
+    | { kind: "schedule"; donation: DonationRecord }
+    | null
+  >(null)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null)
+  // form fields
+  const [farmId, setFarmId] = useState("")
   const [produce, setProduce] = useState("")
   const [quantity, setQuantity] = useState("")
-  const [donations, setDonations] = useState([
-    {
-      produce: "Peaches",
-      farm: "Navarro Family Farm",
-      amount: "40 kg",
-      recipient: "Hope Kitchen",
-      date: "Today, 10:30 AM",
-      status: "Pickup today",
-      tone: "amber" as ActivityTone,
-    },
-    {
-      produce: "Sweet potatoes",
-      farm: "Aquino Highland Greens",
-      amount: "28 kg",
-      recipient: "Food Bank 1",
-      date: "Today, 1:00 PM",
-      status: "Matched",
-      tone: "green" as ActivityTone,
-    },
-    {
-      produce: "Tomatoes",
-      farm: "Santos Organic Farm",
-      amount: "16 kg",
-      recipient: "City Pantry",
-      date: "Oct 29, 9:00 AM",
-      status: "New",
-      tone: "blue" as ActivityTone,
-    },
-    {
-      produce: "Leafy greens",
-      farm: "Riverside Organics",
-      amount: "22 kg",
-      recipient: "Second Harvest",
-      date: "Oct 28, 11:15 AM",
-      status: "Delivered",
-      tone: "dark" as ActivityTone,
-    },
-    {
-      produce: "Carrots",
-      farm: "Navarro Family Farm",
-      amount: "35 kg",
-      recipient: "—",
-      date: "Oct 30, 8:00 AM",
-      status: "Available",
-      tone: "blue" as ActivityTone,
-    },
-  ])
-  const filters = ["All", "Available", "Matched", "Pickup today", "Delivered"]
-  const visibleDonations = donations.filter((donation) => {
-    const matchesFilter = filter === "All" || donation.status === filter
+  const [recipientId, setRecipientId] = useState("")
+  const [pickupAt, setPickupAt] = useState("")
+  const [volunteerId, setVolunteerId] = useState("")
+
+  const load = useCallback(() => {
+    setError("")
+    Promise.all([
+      api.get<DonationRecord[]>("/donations?limit=500"),
+      api.get<Farm[]>("/farmers?status=approved&limit=500"),
+      api.get<RecipientRecord[]>("/recipients?limit=500"),
+      api.get<VolunteerRecord[]>("/volunteers?limit=500"),
+    ])
+      .then(([donationRows, farmRows, recipientRows, volunteerRows]) => {
+        setDonations(donationRows)
+        setFarms(farmRows)
+        setRecipients(recipientRows)
+        setVolunteers(volunteerRows.filter((volunteer) => volunteer.is_active))
+      })
+      .catch((err) => setError(errorText(err)))
+  }, [])
+
+  useEffect(load, [load])
+
+  const open = (next: typeof panel) => {
+    setMessage(null)
+    setPanel(next)
+    if (next?.kind === "log") setFarmId((current) => current || farms[0]?.id || "")
+    if (next?.kind === "match") setRecipientId(next.donation.recipient?.id ?? recipients[0]?.id ?? "")
+    if (next?.kind === "schedule") {
+      setPickupAt(localDateTime(2))
+      setVolunteerId("")
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" })
+  }
+
+  const run = async (work: () => Promise<string>) => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      const text = await work()
+      setPanel(null)
+      setMessage({ kind: "success", text })
+      load()
+    } catch (err) {
+      setMessage({ kind: "error", text: errorText(err) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const logDonation = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    run(async () => {
+      await api.post("/donations", {
+        farmer_id: farmId,
+        produce: produce.trim(),
+        quantity_kg: Number(quantity),
+      })
+      setProduce("")
+      setQuantity("")
+      return `Logged ${produce.trim()}.`
+    })
+  }
+
+  const matchDonation = (donation: DonationRecord) => (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    run(async () => {
+      await api.patch(`/donations/${donation.id}`, { recipient_id: recipientId, status: "matched" })
+      const name = recipients.find((r) => r.id === recipientId)?.name
+      return `${donation.produce} is matched with ${name}. Next: schedule the pickup.`
+    })
+  }
+
+  const schedulePickup = (donation: DonationRecord) => (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    run(async () => {
+      await api.post("/pickups", {
+        donation_id: donation.id,
+        scheduled_at: new Date(pickupAt).toISOString(),
+        volunteer_id: volunteerId || null,
+      })
+      return `Pickup scheduled for ${formatDateTime(new Date(pickupAt).toISOString())}.`
+    })
+  }
+
+  const cancelDonation = (donation: DonationRecord) => {
+    if (!window.confirm(`Cancel the ${donation.produce} donation from ${donation.farmer?.farm_name}?`)) return
+    run(async () => {
+      await api.patch(`/donations/${donation.id}`, { status: "cancelled" })
+      return `Cancelled ${donation.produce}.`
+    })
+  }
+
+  const statusOf = (donation: DonationRecord) =>
+    donation.status === "new"
+      ? { label: "Available", tone: "blue" as ActivityTone }
+      : donationStatus(donation.status, nextPickup(donation)?.scheduled_at)
+
+  const all = donations ?? []
+  const active = all.filter((d) => ["new", "matched", "pickup_scheduled"].includes(d.status))
+  const awaitingPickup = all.filter((d) => d.status === "pickup_scheduled")
+  const dueToday = awaitingPickup.filter((d) => {
+    const pickup = nextPickup(d)
+    return pickup && isToday(pickup.scheduled_at)
+  }).length
+  const matchedThisMonth = all.filter((d) => d.recipient && thisMonth(d.created_at))
+  const rescuedThisMonth = all
+    .filter((d) => d.status === "delivered" && thisMonth(d.delivered_at ?? d.created_at))
+    .reduce((sum, d) => sum + Number(d.quantity_kg), 0)
+
+  const filters = ["All", "Available", "Matched", "Pickup scheduled", "Delivered"]
+  const visibleDonations = all.filter((donation) => {
+    const label = statusOf(donation).label
+    const matchesFilter =
+      filter === "All" ||
+      label === filter ||
+      (filter === "Pickup scheduled" && label === "Pickup today")
     const query = search.toLowerCase()
-    const matchesSearch =
-      `${donation.produce} ${donation.farm} ${donation.recipient}`
-        .toLowerCase()
-        .includes(query)
+    const matchesSearch = `${donation.produce} ${donation.farmer?.farm_name ?? ""} ${donation.recipient?.name ?? ""}`
+      .toLowerCase()
+      .includes(query)
     return matchesFilter && matchesSearch
   })
 
-  const addDonation = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!produce.trim() || !quantity.trim()) return
-    setDonations((current) => [
-      {
-        produce: produce.trim(),
-        farm: "Carla's Demo Farm",
-        amount: `${quantity.trim()} kg`,
-        recipient: "—",
-        date: "Just now",
-        status: "Available",
-        tone: "blue",
-      },
-      ...current,
-    ])
-    setProduce("")
-    setQuantity("")
-    setShowForm(false)
-    setFilter("All")
-    setSearch("")
-  }
-
   return (
-    <AppShell go={go} active="donations" title="Donations">
+    <AppShell go={go} active="donations" title="Donations" live>
       <main className="dashboard-main">
         <section className="page-heading">
           <div>
@@ -1462,54 +1564,87 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
             <h1>Donations</h1>
             <p>Every donation logged by farms in your network.</p>
           </div>
-          <button
-            type="button"
-            className="primary-action"
-            onClick={() => setShowForm((open) => !open)}
-          >
-            {showForm ? "Cancel" : "+ Log donation"}
-          </button>
+          {canManage && (
+            <button
+              type="button"
+              className="primary-action"
+              onClick={() => (panel?.kind === "log" ? setPanel(null) : open({ kind: "log" }))}
+            >
+              {panel?.kind === "log" ? "Cancel" : "+ Log donation"}
+            </button>
+          )}
         </section>
+
+        {error && (
+          <div className="load-error" role="alert">
+            <span>{error}</span>
+            <button type="button" className="quiet-action" onClick={load}>
+              Try again
+            </button>
+          </div>
+        )}
 
         <PageMetrics
           items={[
             {
               label: "Active donations",
-              value: String(donations.length),
-              detail: "+3 this week",
+              value: donations ? String(active.length) : "…",
+              detail: `${all.filter((d) => isToday(d.created_at)).length} posted today`,
               icon: "gift",
               tone: "lime",
             },
             {
               label: "Awaiting pickup",
-              value: "4",
-              detail: "2 due today",
+              value: donations ? String(awaitingPickup.length) : "…",
+              detail: `${dueToday} due today`,
               icon: "clock",
               tone: "cream",
             },
             {
               label: "Matched this month",
-              value: "28",
-              detail: "Across 12 farms",
+              value: donations ? String(matchedThisMonth.length) : "…",
+              detail: `Across ${new Set(matchedThisMonth.map((d) => d.farmer?.id)).size} farms`,
               icon: "users",
               tone: "mint",
             },
             {
               label: "Food rescued",
-              value: "1,284 kg",
-              detail: "This month",
+              value: donations ? `${formatKg(rescuedThisMonth)} kg` : "…",
+              detail: "Delivered this month",
               icon: "leaf",
               tone: "lime",
             },
           ]}
         />
 
-        {showForm && (
-          <form className="inline-form" onSubmit={addDonation}>
+        {message && !panel && (
+          <p className={`page-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>
+            {message.text}
+            {message.kind === "success" && message.text.startsWith("Pickup scheduled") && (
+              <button type="button" className="quiet-action" onClick={() => go("pickups")}>
+                Open Pickups <Icon name="arrow" size={13} />
+              </button>
+            )}
+          </p>
+        )}
+
+        {panel?.kind === "log" && (
+          <form className="inline-form ops-form" onSubmit={logDonation}>
             <div>
               <p className="eyebrow">Quick entry</p>
               <strong>Log a new donation</strong>
             </div>
+            <label>
+              Farm
+              <select required value={farmId} onChange={(event) => setFarmId(event.target.value)}>
+                {farms.length === 0 && <option value="">No approved farms yet</option>}
+                {farms.map((farm) => (
+                  <option key={farm.id} value={farm.id}>
+                    {farm.farm_name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label>
               Produce
               <input
@@ -1524,15 +1659,88 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
               <input
                 required
                 type="number"
-                min="1"
+                min="0.1"
+                step="0.1"
                 value={quantity}
                 onChange={(event) => setQuantity(event.target.value)}
                 placeholder="e.g. 25"
               />
             </label>
-            <button type="submit" className="primary-action">
-              Save donation
+            <button type="submit" className="primary-action" disabled={saving || !farmId}>
+              {saving ? "Saving..." : "Save donation"}
             </button>
+            {message?.kind === "error" && <p className="form-message error" role="alert">{message.text}</p>}
+          </form>
+        )}
+
+        {panel?.kind === "match" && (
+          <form className="inline-form ops-form" onSubmit={matchDonation(panel.donation)}>
+            <div>
+              <p className="eyebrow">Match donation</p>
+              <strong>
+                {panel.donation.produce} · {formatKg(panel.donation.quantity_kg)} kg
+              </strong>
+              <small className="form-sub">{panel.donation.farmer?.farm_name}</small>
+            </div>
+            <label>
+              Send to food bank
+              <select required value={recipientId} onChange={(event) => setRecipientId(event.target.value)}>
+                {recipients.length === 0 && <option value="">No recipients yet</option>}
+                {recipients.map((recipient) => (
+                  <option key={recipient.id} value={recipient.id}>
+                    {recipient.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="outline-action" onClick={() => setPanel(null)}>
+              Close
+            </button>
+            <button type="submit" className="primary-action" disabled={saving || !recipientId}>
+              {saving ? "Saving..." : "Match"}
+            </button>
+            {message?.kind === "error" && <p className="form-message error" role="alert">{message.text}</p>}
+          </form>
+        )}
+
+        {panel?.kind === "schedule" && (
+          <form className="inline-form ops-form" onSubmit={schedulePickup(panel.donation)}>
+            <div>
+              <p className="eyebrow">Schedule pickup</p>
+              <strong>
+                {panel.donation.produce} · {formatKg(panel.donation.quantity_kg)} kg
+              </strong>
+              <small className="form-sub">
+                {panel.donation.farmer?.farm_name} → {panel.donation.recipient?.name}
+              </small>
+            </div>
+            <label>
+              Pickup time
+              <input
+                required
+                type="datetime-local"
+                value={pickupAt}
+                onChange={(event) => setPickupAt(event.target.value)}
+              />
+            </label>
+            <label>
+              Volunteer (optional)
+              <select value={volunteerId} onChange={(event) => setVolunteerId(event.target.value)}>
+                <option value="">Assign later</option>
+                {volunteers.map((volunteer) => (
+                  <option key={volunteer.id} value={volunteer.id}>
+                    {volunteer.full_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="outline-action" onClick={() => setPanel(null)}>
+              Close
+            </button>
+            <button type="submit" className="primary-action" disabled={saving}>
+              {saving ? "Saving..." : "Schedule"}
+            </button>
+            {message?.kind === "error" && <p className="form-message error" role="alert">{message.text}</p>}
           </form>
         )}
 
@@ -1563,37 +1771,83 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
             onFilter={setFilter}
           />
           <div className="table-scroll">
-            <div className="record-table donations-table">
+            <div className={`record-table donations-table ${canManage ? "with-actions" : ""}`}>
               <div className="record-table-head">
                 <span>Produce & farm</span>
                 <span>Quantity</span>
                 <span>Recipient</span>
                 <span>Pickup</span>
                 <span>Status</span>
+                {canManage && <span></span>}
               </div>
-              {visibleDonations.map((donation) => (
-                <div
-                  className="record-row"
-                  key={`${donation.produce}-${donation.farm}-${donation.date}`}
-                >
-                  <div className="record-primary">
-                    <span className="produce-dot">
-                      <Icon name="leaf" size={15} />
-                    </span>
-                    <div>
-                      <strong>{donation.produce}</strong>
-                      <small>{donation.farm}</small>
+              {visibleDonations.map((donation) => {
+                const status = statusOf(donation)
+                const pickup = nextPickup(donation)
+                const busy = saving && panel === null
+                return (
+                  <div className="record-row" key={donation.id}>
+                    <div className="record-primary">
+                      <span className="produce-dot">
+                        <Icon name="leaf" size={15} />
+                      </span>
+                      <div>
+                        <strong>{donation.produce}</strong>
+                        <small>
+                          {donation.farmer?.farm_name ?? "—"}
+                          {donation.expires_at && ["new", "matched"].includes(donation.status)
+                            ? ` · use by ${new Date(donation.expires_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                            : ""}
+                        </small>
+                      </div>
                     </div>
+                    <span>{formatKg(donation.quantity_kg)} kg</span>
+                    <span>{donation.recipient?.name ?? "—"}</span>
+                    <span>
+                      {pickup
+                        ? formatDateTime(pickup.scheduled_at)
+                        : donation.status === "delivered" && donation.delivered_at
+                          ? `Delivered ${formatDateTime(donation.delivered_at)}`
+                          : "—"}
+                    </span>
+                    <StatusPill label={status.label} tone={status.tone} />
+                    {canManage && (
+                      <div className="row-actions">
+                        {donation.status === "new" && (
+                          <>
+                            <button type="button" className="row-action" disabled={busy} onClick={() => open({ kind: "match", donation })}>
+                              Match
+                            </button>
+                            <button type="button" className="row-action danger" disabled={busy} onClick={() => cancelDonation(donation)}>
+                              Cancel
+                            </button>
+                          </>
+                        )}
+                        {donation.status === "matched" && (
+                          <>
+                            <button type="button" className="row-action" onClick={() => open({ kind: "schedule", donation })}>
+                              Schedule
+                            </button>
+                            <button type="button" className="row-action" onClick={() => open({ kind: "match", donation })}>
+                              Change
+                            </button>
+                          </>
+                        )}
+                        {donation.status === "pickup_scheduled" && (
+                          <button type="button" className="row-action" onClick={() => go("pickups")}>
+                            View pickup
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <span>{donation.amount}</span>
-                  <span>{donation.recipient}</span>
-                  <span>{donation.date}</span>
-                  <StatusPill label={donation.status} tone={donation.tone} />
-                </div>
-              ))}
-              {visibleDonations.length === 0 && (
-                <p className="empty-state">No donations match your search.</p>
+                )
+              })}
+              {donations && visibleDonations.length === 0 && (
+                <p className="empty-state">
+                  {all.length ? "No donations match your search." : "No donations yet."}
+                </p>
               )}
+              {!donations && !error && <p className="empty-state">Loading…</p>}
             </div>
           </div>
         </section>
@@ -1603,71 +1857,139 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
 }
 
 // ── Pickups Screen ────────────────────────────────────────────────────────────
+type PickupRecord = {
+  id: string
+  scheduled_at: string
+  status: "scheduled" | "in_progress" | "completed" | "cancelled"
+  volunteer_id: string | null
+  donation: {
+    id: string
+    produce: string
+    quantity_kg: number | string
+    status: DonationStatus
+    farmer: { farm_name: string } | null
+    recipient: { name: string } | null
+  } | null
+  volunteer: { id: string; full_name: string; phone: string | null } | null
+}
+
+function pickupStatus(pickup: PickupRecord): { label: string; tone: ActivityTone } {
+  if (pickup.status === "completed") return { label: "Delivered", tone: "dark" }
+  if (pickup.status === "cancelled") return { label: "Cancelled", tone: "dark" }
+  if (pickup.status === "in_progress") return { label: "On the way", tone: "blue" }
+  return pickup.volunteer ? { label: "Confirmed", tone: "green" } : { label: "Needs volunteer", tone: "amber" }
+}
+
 function PickupsScreen({ go }: { go: (s: Screen) => void }) {
+  const { account } = useSession()
+  const canManage = canManageOps(account)
   const [search, setSearch] = useState("")
-  const [filter, setFilter] = useState("All")
-  const [assigned, setAssigned] = useState<string[]>([
-    "pickup-peaches",
-    "pickup-greens",
-  ])
-  const pickups = [
-    {
-      id: "pickup-peaches",
-      time: "Today · 10:30 AM",
-      farm: "Navarro Family Farm",
-      goods: "Peaches · 40 kg",
-      recipient: "Hope Kitchen",
-      volunteer: "Mia Santos",
-      status: "Confirmed",
-      tone: "green" as ActivityTone,
-    },
-    {
-      id: "pickup-potatoes",
-      time: "Today · 1:00 PM",
-      farm: "Aquino Highland Greens",
-      goods: "Sweet potatoes · 28 kg",
-      recipient: "Food Bank 1",
-      volunteer: "Unassigned",
-      status: "Needs volunteer",
-      tone: "amber" as ActivityTone,
-    },
-    {
-      id: "pickup-greens",
-      time: "Tomorrow · 9:15 AM",
-      farm: "Riverside Organics",
-      goods: "Leafy greens · 22 kg",
-      recipient: "Second Harvest",
-      volunteer: "Leo Cruz",
-      status: "Confirmed",
-      tone: "green" as ActivityTone,
-    },
-    {
-      id: "pickup-tomatoes",
-      time: "Oct 30 · 11:00 AM",
-      farm: "Santos Organic Farm",
-      goods: "Tomatoes · 16 kg",
-      recipient: "City Pantry",
-      volunteer: "Unassigned",
-      status: "Needs volunteer",
-      tone: "amber" as ActivityTone,
-    },
-  ]
-  const filteredPickups = pickups.filter((pickup) => {
+  const [filter, setFilter] = useState("Upcoming")
+  const [pickups, setPickups] = useState<PickupRecord[] | null>(null)
+  const [volunteers, setVolunteers] = useState<VolunteerRecord[]>([])
+  const [error, setError] = useState("")
+  const [selected, setSelected] = useState<PickupRecord | null>(null)
+  const [volunteerId, setVolunteerId] = useState("")
+  const [pickupAt, setPickupAt] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null)
+
+  const load = useCallback(() => {
+    setError("")
+    Promise.all([
+      api.get<PickupRecord[]>("/pickups"),
+      api.get<VolunteerRecord[]>("/volunteers?limit=500"),
+    ])
+      .then(([pickupRows, volunteerRows]) => {
+        setPickups(pickupRows)
+        setVolunteers(volunteerRows.filter((volunteer) => volunteer.is_active))
+      })
+      .catch((err) => setError(errorText(err)))
+  }, [])
+
+  useEffect(load, [load])
+
+  const manage = (pickup: PickupRecord) => {
+    setMessage(null)
+    setSelected(pickup)
+    setVolunteerId(pickup.volunteer_id ?? "")
+    const date = new Date(pickup.scheduled_at)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    setPickupAt(`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`)
+    window.scrollTo({ top: 0, behavior: "smooth" })
+  }
+
+  const update = async (pickup: PickupRecord, changes: Record<string, unknown>, done: string) => {
+    setSaving(true)
+    setMessage(null)
+    try {
+      await api.patch(`/pickups/${pickup.id}`, changes)
+      setSelected(null)
+      setMessage({ kind: "success", text: done })
+      load()
+    } catch (err) {
+      setMessage({ kind: "error", text: errorText(err) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const label = (pickup: PickupRecord) =>
+    `${pickup.donation?.produce ?? "Donation"} · ${formatKg(pickup.donation?.quantity_kg ?? 0)} kg`
+
+  const saveChanges = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!selected) return
+    const volunteer = volunteers.find((v) => v.id === volunteerId)
+    update(
+      selected,
+      { volunteer_id: volunteerId || null, scheduled_at: new Date(pickupAt).toISOString() },
+      volunteer
+        ? `${volunteer.full_name} will pick up ${label(selected)}.`
+        : `Saved. ${label(selected)} still needs a volunteer.`,
+    )
+  }
+
+  const markDelivered = (pickup: PickupRecord) => {
+    if (!window.confirm(`Mark ${label(pickup)} as delivered to ${pickup.donation?.recipient?.name ?? "the food bank"}?`)) return
+    update(pickup, { status: "completed" }, `${label(pickup)} delivered. Nice work!`)
+  }
+
+  const cancelPickup = (pickup: PickupRecord) => {
+    if (!window.confirm(`Cancel this pickup? The donation goes back to "Matched" so you can reschedule it.`)) return
+    update(pickup, { status: "cancelled" }, "Pickup cancelled. You can reschedule it from Donations.")
+  }
+
+  const all = pickups ?? []
+  const open = all.filter((p) => p.status === "scheduled" || p.status === "in_progress")
+  const today = all.filter((p) => p.status !== "cancelled" && isToday(p.scheduled_at))
+  const upcoming = open.filter((p) => new Date(p.scheduled_at) >= new Date(Date.now() - 3600_000))
+  const nextOne = upcoming[0]
+  const needVolunteer = open.filter((p) => !p.volunteer)
+  const weekAgo = Date.now() - 7 * 86400_000
+  const completedWeek = all.filter((p) => p.status === "completed" && new Date(p.scheduled_at).getTime() >= weekAgo)
+  const kgWeek = completedWeek.reduce((sum, p) => sum + Number(p.donation?.quantity_kg ?? 0), 0)
+  const inSevenDays = open.filter((p) => new Date(p.scheduled_at).getTime() <= Date.now() + 7 * 86400_000)
+
+  const filteredPickups = all.filter((pickup) => {
     const matchesFilter =
-      filter === "All" ||
-      (filter === "Needs volunteer"
-        ? !assigned.includes(pickup.id)
-        : assigned.includes(pickup.id))
+      filter === "Upcoming"
+        ? pickup.status === "scheduled" || pickup.status === "in_progress"
+        : filter === "Needs volunteer"
+          ? (pickup.status === "scheduled" || pickup.status === "in_progress") && !pickup.volunteer
+          : filter === "Delivered"
+            ? pickup.status === "completed"
+            : true
     return (
       matchesFilter &&
-      `${pickup.farm} ${pickup.goods} ${pickup.recipient} ${pickup.volunteer}`
+      `${pickup.donation?.farmer?.farm_name ?? ""} ${pickup.donation?.produce ?? ""} ${pickup.donation?.recipient?.name ?? ""} ${pickup.volunteer?.full_name ?? ""}`
         .toLowerCase()
         .includes(search.toLowerCase())
     )
   })
 
   return (
-    <AppShell go={go} active="pickups" title="Pickups">
+    <AppShell go={go} active="pickups" title="Pickups" live>
       <main className="dashboard-main">
         <section className="page-heading">
           <div>
@@ -1680,41 +2002,106 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
             className="primary-action"
             onClick={() => setFilter("Needs volunteer")}
           >
-            + Assign a volunteer
+            {canManage ? "+ Assign a volunteer" : "Needs volunteer"}
           </button>
         </section>
+
+        {error && (
+          <div className="load-error" role="alert">
+            <span>{error}</span>
+            <button type="button" className="quiet-action" onClick={load}>
+              Try again
+            </button>
+          </div>
+        )}
+
         <PageMetrics
           items={[
             {
               label: "Scheduled today",
-              value: "4",
-              detail: "Next pickup at 10:30 AM",
+              value: pickups ? String(today.length) : "…",
+              detail: nextOne ? `Next: ${formatDateTime(nextOne.scheduled_at)}` : "Nothing upcoming",
               icon: "truck",
               tone: "mint",
             },
             {
               label: "Need a volunteer",
-              value: "2",
-              detail: "Assign before noon",
+              value: pickups ? String(needVolunteer.length) : "…",
+              detail: needVolunteer.length ? "Assign before pickup time" : "All covered",
               icon: "users",
               tone: "cream",
             },
             {
-              label: "Completed this week",
-              value: "18",
-              detail: "94% on time",
+              label: "Delivered this week",
+              value: pickups ? String(completedWeek.length) : "…",
+              detail: `${formatKg(kgWeek)} kg of food`,
               icon: "chart",
               tone: "lime",
             },
             {
-              label: "Average delivery",
-              value: "42 min",
-              detail: "Farm to recipient",
+              label: "Next 7 days",
+              value: pickups ? String(inSevenDays.length) : "…",
+              detail: "Pickups planned",
               icon: "clock",
               tone: "mint",
             },
           ]}
         />
+
+        {message && !selected && (
+          <p className={`page-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>
+            {message.text}
+          </p>
+        )}
+
+        {selected && (
+          <form className="inline-form ops-form" onSubmit={saveChanges}>
+            <div>
+              <p className="eyebrow">Manage pickup</p>
+              <strong>{label(selected)}</strong>
+              <small className="form-sub">
+                {selected.donation?.farmer?.farm_name} → {selected.donation?.recipient?.name}
+              </small>
+            </div>
+            <label>
+              Volunteer
+              <select value={volunteerId} onChange={(event) => setVolunteerId(event.target.value)}>
+                <option value="">Unassigned</option>
+                {volunteers.map((volunteer) => (
+                  <option key={volunteer.id} value={volunteer.id}>
+                    {volunteer.full_name}
+                    {volunteer.phone ? ` · ${volunteer.phone}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Pickup time
+              <input
+                required
+                type="datetime-local"
+                value={pickupAt}
+                onChange={(event) => setPickupAt(event.target.value)}
+              />
+            </label>
+            <button type="submit" className="primary-action" disabled={saving}>
+              {saving ? "Saving..." : "Save"}
+            </button>
+            <div className="form-extra-actions">
+              <button type="button" className="row-action" disabled={saving} onClick={() => markDelivered(selected)}>
+                Mark delivered
+              </button>
+              <button type="button" className="row-action danger" disabled={saving} onClick={() => cancelPickup(selected)}>
+                Cancel pickup
+              </button>
+              <button type="button" className="row-action" onClick={() => setSelected(null)}>
+                Close
+              </button>
+            </div>
+            {message?.kind === "error" && <p className="form-message error" role="alert">{message.text}</p>}
+          </form>
+        )}
+
         <section className="panel records-panel">
           <div className="records-heading">
             <div>
@@ -1723,14 +2110,14 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
                 Pickup schedule <span>{filteredPickups.length}</span>
               </h2>
             </div>
-            <span className="date-chip">
-              This week <Icon name="arrow" size={13} />
-            </span>
+            <button type="button" className="quiet-action" onClick={() => go("donations")}>
+              Schedule from Donations <Icon name="arrow" size={13} />
+            </button>
           </div>
           <ListToolbar
             search={search}
             onSearch={setSearch}
-            filters={["All", "Needs volunteer", "Assigned"]}
+            filters={["Upcoming", "Needs volunteer", "Delivered", "All"]}
             activeFilter={filter}
             onFilter={setFilter}
           />
@@ -1745,7 +2132,8 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
                 <span></span>
               </div>
               {filteredPickups.map((pickup) => {
-                const isAssigned = assigned.includes(pickup.id)
+                const status = pickupStatus(pickup)
+                const isOpen = pickup.status === "scheduled" || pickup.status === "in_progress"
                 return (
                   <div className="record-row" key={pickup.id}>
                     <div className="record-primary">
@@ -1753,36 +2141,37 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
                         <Icon name="clock" size={16} />
                       </span>
                       <div>
-                        <strong>{pickup.time}</strong>
-                        <small>{pickup.farm}</small>
+                        <strong>{formatDateTime(pickup.scheduled_at)}</strong>
+                        <small>{pickup.donation?.farmer?.farm_name ?? "—"}</small>
                       </div>
                     </div>
-                    <span>{pickup.goods}</span>
-                    <span>{pickup.recipient}</span>
-                    <span>{isAssigned ? pickup.volunteer : "Unassigned"}</span>
-                    <StatusPill
-                      label={isAssigned ? "Confirmed" : "Needs volunteer"}
-                      tone={isAssigned ? "green" : "amber"}
-                    />
-                    <button
-                      type="button"
-                      className="row-action"
-                      onClick={() =>
-                        setAssigned((current) =>
-                          isAssigned
-                            ? current.filter((id) => id !== pickup.id)
-                            : [...current, pickup.id],
-                        )
-                      }
-                    >
-                      {isAssigned ? "Unassign" : "Assign"}
-                    </button>
+                    <span>{label(pickup)}</span>
+                    <span>{pickup.donation?.recipient?.name ?? "—"}</span>
+                    <span title={pickup.volunteer?.phone ?? ""}>{pickup.volunteer?.full_name ?? "Unassigned"}</span>
+                    <StatusPill label={status.label} tone={status.tone} />
+                    {canManage && isOpen ? (
+                      <div className="row-actions">
+                        <button type="button" className="row-action" onClick={() => manage(pickup)}>
+                          {pickup.volunteer ? "Manage" : "Assign"}
+                        </button>
+                        {pickup.volunteer && (
+                          <button type="button" className="row-action" disabled={saving} onClick={() => markDelivered(pickup)}>
+                            Done
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="muted-cell">—</span>
+                    )}
                   </div>
                 )
               })}
-              {filteredPickups.length === 0 && (
-                <p className="empty-state">No pickups match your search.</p>
+              {pickups && filteredPickups.length === 0 && (
+                <p className="empty-state">
+                  {all.length ? "No pickups here." : "No pickups yet. Schedule one from a matched donation."}
+                </p>
               )}
+              {!pickups && !error && <p className="empty-state">Loading…</p>}
             </div>
           </div>
         </section>

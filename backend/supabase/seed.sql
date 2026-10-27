@@ -25,7 +25,7 @@ insert into public.volunteers (id, full_name, email, phone) values
 
 insert into public.donations (id, produce, quantity_kg, farmer_id, recipient_id, status, expires_at, delivered_at, created_by, created_at) values
   ('44444444-0000-0000-0000-000000000001', 'Peaches',        40, '11111111-0000-0000-0000-000000000001', '22222222-0000-0000-0000-000000000001', 'pickup_scheduled', now() + interval '2 days',  null, null, now() - interval '1 day'),
-  ('44444444-0000-0000-0000-000000000002', 'Sweet potatoes', 28, '11111111-0000-0000-0000-000000000002', '22222222-0000-0000-0000-000000000002', 'matched',          now() + interval '5 days',  null, null, now() - interval '6 hours'),
+  ('44444444-0000-0000-0000-000000000002', 'Sweet potatoes', 28, '11111111-0000-0000-0000-000000000002', '22222222-0000-0000-0000-000000000002', 'pickup_scheduled',          now() + interval '5 days',  null, null, now() - interval '6 hours'),
   ('44444444-0000-0000-0000-000000000003', 'Tomatoes',       16, '11111111-0000-0000-0000-000000000003', null,                                   'new',              now() + interval '3 hours', null, null, now() - interval '1 hour'),
   ('44444444-0000-0000-0000-000000000004', 'Leafy greens',   22, '11111111-0000-0000-0000-000000000004', '22222222-0000-0000-0000-000000000004', 'delivered',        null, now() - interval '1 day',  null, now() - interval '2 days'),
   ('44444444-0000-0000-0000-000000000005', 'Calamansi',      35, '11111111-0000-0000-0000-000000000001', '22222222-0000-0000-0000-000000000003', 'delivered',        null, now() - interval '3 days', null, now() - interval '4 days'),
@@ -34,5 +34,4 @@ insert into public.donations (id, produce, quantity_kg, farmer_id, recipient_id,
 insert into public.pickups (donation_id, volunteer_id, scheduled_at, status) values
   ('44444444-0000-0000-0000-000000000001', '33333333-0000-0000-0000-000000000001', date_trunc('day', now()) + interval '10 hours 30 minutes', 'scheduled'),
   ('44444444-0000-0000-0000-000000000002', null,                                   date_trunc('day', now()) + interval '14 hours',             'scheduled'),
-  ('44444444-0000-0000-0000-000000000003', null,                                   date_trunc('day', now()) + interval '16 hours',             'scheduled'),
   ('44444444-0000-0000-0000-000000000004', '33333333-0000-0000-0000-000000000002', now() - interval '1 day',                                    'completed');

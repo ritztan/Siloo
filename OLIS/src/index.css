@@ -542,3 +542,36 @@ h1:before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; bord
 .detail-dialog .form-message.error { color: #a33a2a; }
 .detail-dialog .form-message.success { color: var(--green); }
 @media (max-width: 470px) { .dialog-form { grid-template-columns: 1fr; } }
+
+/* Reports (live) */
+.impact-breakdown > div.impact-entry:not(.impact-track) { grid-column: 1 / -1; display: grid; gap: 7px; }
+.impact-breakdown .impact-entry > div:first-child { display: flex; align-items: center; gap: 7px; color: #53645b; font-size: 9px; }
+.impact-breakdown .impact-entry > div:first-child strong { margin-left: auto; color: var(--forest); font-size: 9px; }
+.impact-breakdown .impact-entry .impact-track { margin-bottom: 4px; }
+.report-bars.dense { gap: 2px; }
+.report-bars.dense .report-bar-column > span { width: 80%; }
+.report-bar-column > span.empty { min-height: 0; }
+.report-bar-column:nth-child(3n) > span { background: var(--mint); }
+.report-bar-column:last-child > span { background: var(--green); }
+.report-bar-column small { white-space: nowrap; }
+.report-rankings { margin-top: 16px; }
+.report-rankings .records-heading { border-bottom: 1px solid var(--line); }
+.ranking-grid { padding: 18px 20px 20px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; }
+.ranking .eyebrow { margin-bottom: 10px; }
+.ranking ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 9px; }
+.ranking li > div:first-child { display: flex; justify-content: space-between; gap: 8px; color: #53645b; font-size: 9px; }
+.ranking li > div:first-child span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ranking li > div:first-child strong { color: var(--forest); white-space: nowrap; }
+.ranking .impact-track { margin: 5px 0 0; }
+.ranking-empty { margin: 0; color: var(--muted); font-size: 9px; grid-column: 1 / -1; }
+@media (max-width: 1100px) { .ranking-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .ranking-grid { grid-template-columns: 1fr; } }
+@media print {
+  .sidebar, .admin-topbar, .report-period .range-picker, .page-heading .secondary-action, .report-note > button { display: none !important; }
+  .workspace { margin-left: 0 !important; width: 100% !important; }
+}
+
+@media (max-width: 760px) {
+  .stats-grid article > span { position: static; display: block; margin-top: 8px; line-height: 1.4; }
+}
+.impact-breakdown .impact-entry > div:first-child > span:nth-child(2) { flex: 1; }

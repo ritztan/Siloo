@@ -258,9 +258,7 @@ const FARMER_NAV: NavItem[] = [
 // ── Sample data ───────────────────────────────────────────────────────────────
 const RANGES = ["7 days", "30 days"]
 
-const VOLUME_BARS = [35, 52, 44, 70, 61, 86, 76, 58, 91, 67, 80, 96]
 
-const CHART_DAYS = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 
 // ────────────────────────────────────────────────────────────────────────────
 // Shared pieces
@@ -3368,29 +3366,129 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
 }
 
 // ── Reports Screen ────────────────────────────────────────────────────────────
+type ReportData = {
+  period: "7d" | "30d" | "12m"
+  start: string
+  end: string
+  totals: {
+    kg_rescued: number
+    previous_kg_rescued: number
+    change_percent: number | null
+    delivered_donations: number
+    posted_donations: number
+    matched_percent: number | null
+    partner_farms: number
+    partner_recipients: number
+    estimated_meals: number
+    kg_per_meal: number
+  }
+  series: { key: string; label: string; kg: number }[]
+  where_it_went: { name: string; kg: number; percent: number }[]
+  top_farms: { name: string; kg: number }[]
+  top_produce: { name: string; kg: number }[]
+  top_recipients: { name: string; kg: number }[]
+  top_volunteers: { name: string; pickups: number }[]
+}
+
+const REPORT_PERIODS: { label: string; value: ReportData["period"]; phrase: string }[] = [
+  { label: "7 days", value: "7d", phrase: "in the last 7 days" },
+  { label: "30 days", value: "30d", phrase: "in the last 30 days" },
+  { label: "12 months", value: "12m", phrase: "in the last 12 months" },
+]
+
+const IMPACT_DOTS = ["green-dot", "yellow-dot", "blue-dot"]
+const IMPACT_COLORS = ["var(--green)", "#d3a63c", "#7999a2"]
+
+// A round number just above the biggest bar, for the chart's scale
+function niceMax(value: number) {
+  if (value <= 0) return 100
+  const magnitude = 10 ** Math.floor(Math.log10(value))
+  const step = [1, 2, 2.5, 5, 10].find((s) => s * magnitude >= value) ?? 10
+  return step * magnitude
+}
+
 function ReportsScreen({ go }: { go: (s: Screen) => void }) {
-  const [range, setRange] = useState("7 days")
-  const bars = range === "7 days" ? VOLUME_BARS.slice(5) : VOLUME_BARS
-  const labels =
-    range === "7 days"
-      ? CHART_DAYS
-      : [
-          "W1",
-          "W2",
-          "W3",
-          "W4",
-          "W5",
-          "W6",
-          "W7",
-          "W8",
-          "W9",
-          "W10",
-          "W11",
-          "W12",
-        ]
+  const [period, setPeriod] = useState<ReportData["period"]>("30d")
+  const [data, setData] = useState<ReportData | null>(null)
+  const [error, setError] = useState("")
+
+  const load = useCallback(() => {
+    setError("")
+    api
+      .get<ReportData>(`/reports?period=${period}`)
+      .then(setData)
+      .catch((err) => setError(errorText(err)))
+  }, [period])
+
+  useEffect(load, [load])
+
+  const totals = data?.totals
+  const phrase = REPORT_PERIODS.find((p) => p.value === period)?.phrase ?? ""
+  const scale = niceMax(Math.max(0, ...(data?.series ?? []).map((point) => point.kg)))
+  const labelEvery = (data?.series.length ?? 0) > 12 ? 5 : 1
+  const change = totals?.change_percent
+
+  const changeText =
+    !totals || totals.kg_rescued === 0
+      ? "No deliveries yet in this period"
+      : change === null || change === undefined
+        ? "First deliveries in this comparison"
+        : change === 0
+          ? "Same as the previous period"
+          : `${change > 0 ? "↑" : "↓"} ${Math.abs(change)}% vs previous period`
+
+  const note = !totals
+    ? null
+    : totals.kg_rescued === 0
+      ? {
+          title: "No deliveries in this period yet",
+          text: "Once pickups are marked delivered on the Pickups page, they show up here.",
+        }
+      : change && change > 0
+        ? {
+            title: "Rescue is growing in your network",
+            text: `Food recovery is up ${change}% compared with the previous period. Thank you for helping local food reach local tables.`,
+          }
+        : change && change < 0
+          ? {
+              title: "Rescue dipped this period",
+              text: `Deliveries are down ${Math.abs(change)}% from the previous period. Check Donations for produce waiting to be matched.`,
+            }
+          : {
+              title: `${formatKg(totals.kg_rescued)} kg rescued ${phrase}`,
+              text: "Thank you for helping local food reach local tables.",
+            }
+
+  const ranking = (title: string, rows: { name: string; value: string; share: number }[], empty: string) => (
+    <div className="ranking">
+      <p className="eyebrow">{title}</p>
+      {rows.length ? (
+        <ol>
+          {rows.map((row) => (
+            <li key={row.name}>
+              <div>
+                <span title={row.name}>{row.name}</span>
+                <strong>{row.value}</strong>
+              </div>
+              <div className="impact-track">
+                <i style={{ width: `${Math.max(4, row.share)}%` }} />
+              </div>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="ranking-empty">{empty}</p>
+      )}
+    </div>
+  )
+
+  const share = (value: number, rows: { kg?: number; pickups?: number }[]) => {
+    const top = Math.max(...rows.map((row) => row.kg ?? row.pickups ?? 0), 0)
+    return top ? (value / top) * 100 : 0
+  }
 
   return (
-    <AppShell go={go} active="reports" title="Reports">
+    <AppShell go={go} active="reports" title="Reports" live>
       <main className="dashboard-main">
         <section className="page-heading">
           <div>
@@ -3406,53 +3504,73 @@ function ReportsScreen({ go }: { go: (s: Screen) => void }) {
             <Icon name="chart" size={15} /> Export report
           </button>
         </section>
+
         <div className="report-period">
-          <span>Reporting period</span>
+          <span>
+            Reporting period
+            {data
+              ? ` · ${new Date(`${data.start}T00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: period === "12m" ? "numeric" : undefined })} – ${new Date(`${data.end}T00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+              : ""}
+          </span>
           <div className="range-picker">
-            {RANGES.map((option) => (
+            {REPORT_PERIODS.map((option) => (
               <button
-                key={option}
+                key={option.value}
                 type="button"
-                className={range === option ? "selected" : ""}
-                onClick={() => setRange(option)}
+                className={period === option.value ? "selected" : ""}
+                onClick={() => setPeriod(option.value)}
               >
-                {option}
+                {option.label}
               </button>
             ))}
           </div>
         </div>
+
+        {error && (
+          <div className="load-error" role="alert">
+            <span>{error}</span>
+            <button type="button" className="quiet-action" onClick={load}>
+              Try again
+            </button>
+          </div>
+        )}
+
         <PageMetrics
           items={[
             {
               label: "Food rescued",
-              value: range === "7 days" ? "312 kg" : "1,284 kg",
-              detail: "↑ 18% vs previous period",
+              value: totals ? `${formatKg(totals.kg_rescued)} kg` : "…",
+              detail: totals ? changeText : "",
               icon: "leaf",
               tone: "lime",
             },
             {
               label: "Successful donations",
-              value: range === "7 days" ? "24" : "86",
-              detail: "91% matched to a partner",
+              value: totals ? String(totals.delivered_donations) : "…",
+              detail:
+                totals?.matched_percent !== null && totals?.matched_percent !== undefined
+                  ? `${totals.matched_percent}% of posted donations matched`
+                  : "No donations posted yet",
               icon: "gift",
               tone: "mint",
             },
             {
               label: "Community partners",
-              value: "36",
-              detail: "24 farms · 12 recipients",
+              value: totals ? String(totals.partner_farms + totals.partner_recipients) : "…",
+              detail: totals ? `${totals.partner_farms} farms · ${totals.partner_recipients} recipients` : "",
               icon: "users",
               tone: "cream",
             },
             {
               label: "Estimated meals",
-              value: range === "7 days" ? "780" : "3,210",
-              detail: "From rescued produce",
+              value: totals ? totals.estimated_meals.toLocaleString("en-US") : "…",
+              detail: totals ? `At about ${totals.kg_per_meal} kg per meal` : "",
               icon: "home",
               tone: "lime",
             },
           ]}
         />
+
         <section className="reports-grid">
           <article className="panel report-chart">
             <div className="records-heading">
@@ -3461,33 +3579,31 @@ function ReportsScreen({ go }: { go: (s: Screen) => void }) {
                 <h2>Food rescued over time</h2>
               </div>
               <span className="chart-legend">
-                <i /> Kilograms
+                <i /> Kilograms {period === "12m" ? "per month" : "per day"}
               </span>
             </div>
             <div className="report-chart-area">
               <div className="chart-y-labels">
-                <span>100 kg</span>
-                <span>75 kg</span>
-                <span>50 kg</span>
-                <span>25 kg</span>
-                <span>0</span>
+                {[1, 0.75, 0.5, 0.25, 0].map((fraction) => (
+                  <span key={fraction}>{fraction ? `${formatKg(scale * fraction)} kg` : "0"}</span>
+                ))}
               </div>
-              <div className="report-bars">
-                {bars.map((height, index) => (
-                  <div
-                    className="report-bar-column"
-                    key={`${labels[index]}-${index}`}
-                  >
+              <div className={`report-bars ${data && data.series.length > 12 ? "dense" : ""}`}>
+                {data?.series.map((point, index) => (
+                  <div className="report-bar-column" key={point.key}>
                     <span
-                      style={{ height: `${height}%` }}
-                      title={`${height} kg`}
+                      className={point.kg ? "" : "empty"}
+                      style={{ height: `${point.kg ? Math.max(3, (point.kg / scale) * 100) : 0}%` }}
+                      title={`${point.label}: ${formatKg(point.kg)} kg`}
                     />
-                    <small>{labels[index]}</small>
+                    <small>{index % labelEvery === 0 || index === data.series.length - 1 ? point.label : ""}</small>
                   </div>
                 ))}
               </div>
             </div>
+            {!data && !error && <p className="chart-empty">Loading…</p>}
           </article>
+
           <article className="panel impact-card">
             <div className="records-heading">
               <div>
@@ -3496,54 +3612,80 @@ function ReportsScreen({ go }: { go: (s: Screen) => void }) {
               </div>
             </div>
             <div className="impact-breakdown">
-              <div>
-                <span className="impact-dot green-dot" />
-                <span>Community kitchens</span>
-                <strong>42%</strong>
-              </div>
-              <div className="impact-track">
-                <i style={{ width: "42%" }} />
-              </div>
-              <div>
-                <span className="impact-dot yellow-dot" />
-                <span>Food banks</span>
-                <strong>34%</strong>
-              </div>
-              <div className="impact-track">
-                <i style={{ width: "34%" }} />
-              </div>
-              <div>
-                <span className="impact-dot blue-dot" />
-                <span>Neighborhood pantries</span>
-                <strong>24%</strong>
-              </div>
-              <div className="impact-track">
-                <i style={{ width: "24%" }} />
-              </div>
+              {data?.where_it_went.map((row, index) => (
+                <div key={row.name} className="impact-entry">
+                  <div>
+                    <span className={`impact-dot ${IMPACT_DOTS[index % IMPACT_DOTS.length]}`} />
+                    <span>{row.name}</span>
+                    <strong title={`${formatKg(row.kg)} kg`}>{row.percent}%</strong>
+                  </div>
+                  <div className="impact-track">
+                    <i style={{ width: `${row.percent}%`, background: IMPACT_COLORS[index % IMPACT_COLORS.length] }} />
+                  </div>
+                </div>
+              ))}
+              {data && data.where_it_went.length === 0 && (
+                <p className="ranking-empty">No deliveries {phrase} yet.</p>
+              )}
             </div>
             <div className="impact-foot">
               <Icon name="leaf" size={17} />
               <span>
-                <strong>1,284 kg</strong> kept out of landfill this month
+                <strong>{totals ? `${formatKg(totals.kg_rescued)} kg` : "…"}</strong> kept out of landfill {phrase}
               </span>
             </div>
           </article>
         </section>
-        <section className="panel report-note">
-          <span className="queue-icon">
-            <Icon name="chart" />
-          </span>
-          <div>
-            <strong>Rescue is growing in your network</strong>
-            <p>
-              Food recovery is up 18% compared with the previous period. Thank
-              you for helping local food reach local tables.
-            </p>
+
+        <section className="panel report-rankings">
+          <div className="records-heading">
+            <div>
+              <p className="eyebrow">Top contributors</p>
+              <h2>Who made it happen</h2>
+            </div>
           </div>
-          <button type="button" onClick={() => go("donations")}>
-            View donations <Icon name="arrow" size={15} />
-          </button>
+          <div className="ranking-grid">
+            {ranking(
+              "Farms · kg donated",
+              (data?.top_farms ?? []).map((row) => ({ name: row.name, value: `${formatKg(row.kg)} kg`, share: share(row.kg, data?.top_farms ?? []) })),
+              "No deliveries yet.",
+            )}
+            {ranking(
+              "Produce · kg rescued",
+              (data?.top_produce ?? []).map((row) => ({ name: row.name, value: `${formatKg(row.kg)} kg`, share: share(row.kg, data?.top_produce ?? []) })),
+              "No deliveries yet.",
+            )}
+            {ranking(
+              "Food banks · kg received",
+              (data?.top_recipients ?? []).map((row) => ({ name: row.name, value: `${formatKg(row.kg)} kg`, share: share(row.kg, data?.top_recipients ?? []) })),
+              "No deliveries yet.",
+            )}
+            {ranking(
+              "Volunteers · pickups",
+              (data?.top_volunteers ?? []).map((row) => ({
+                name: row.name,
+                value: `${row.pickups} ${row.pickups === 1 ? "pickup" : "pickups"}`,
+                share: share(row.pickups, data?.top_volunteers ?? []),
+              })),
+              "No completed pickups yet.",
+            )}
+          </div>
         </section>
+
+        {note && (
+          <section className="panel report-note">
+            <span className="queue-icon">
+              <Icon name="chart" />
+            </span>
+            <div>
+              <strong>{note.title}</strong>
+              <p>{note.text}</p>
+            </div>
+            <button type="button" onClick={() => go("donations")}>
+              View donations <Icon name="arrow" size={15} />
+            </button>
+          </section>
+        )}
       </main>
     </AppShell>
   )

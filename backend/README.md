@@ -28,6 +28,7 @@ backend/
 │       ├── auth.py        ← /auth/signup, /auth/signin, /auth/me ...
 │       ├── farmer.py      ← /farmer/... (the farmer's own dashboard and donations)
 │       ├── dashboard.py   ← /dashboard (coordinator dashboard)
+│       ├── reports.py     ← /reports (Reports page)
 │       ├── resources.py   ← /farmers, /volunteers, /recipients, /donations, /pickups
 │       └── crud.py        ← shared list/get/create/update/delete logic
 ├── supabase/
@@ -114,7 +115,7 @@ npm run dev
 
 Open **http://localhost:5173**. The website talks to the API at `http://127.0.0.1:8000`. To use a different address, create `OLIS/.env` with `VITE_API_URL=...`. If the website runs somewhere other than port 5173 or 8443, add it to `CORS_ORIGINS` in `backend/.env`.
 
-**What's connected so far:** farmer sign-up, both logins, the farmer status page and farmer dashboard, and the coordinator Dashboard, Donations, Pickups, Farmers, Volunteers and Recipients pages. Reports still shows sample data (the top bar says so).
+**Everything is connected:** farmer sign-up, both logins, the farmer status page and farmer dashboard, and the coordinator Dashboard, Donations, Pickups, Farmers, Volunteers, Recipients and Reports pages.
 
 ## Endpoints
 
@@ -130,6 +131,7 @@ Open **http://localhost:5173**. The website talks to the API at `http://127.0.0.
 | PATCH | `/farmer/donations/{id}` | Farmer: edit a donation that isn't matched yet |
 | POST | `/farmer/donations/{id}/cancel` | Farmer: cancel a donation that isn't matched yet |
 | GET | `/dashboard?days=7` | Coordinator: stat cards, priority queue, activity, chart (`days=7` or `30`) |
+| GET | `/reports?period=30d` | Reports: totals, change vs previous period, chart, where food went, top farms/produce/food banks/volunteers (`7d`, `30d`, `12m`) |
 | GET / POST | `/farmers` | List (`?status=pending`, `?q=name`) / add |
 | POST | `/farmers/{id}/approve`, `/reject`, `/suspend` | Review a farmer account |
 | GET / POST | `/donations` | List (`?status=new`) / log a donation |

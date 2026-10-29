@@ -4,7 +4,8 @@
 --
 --  * crops: the crop shelf-life table behind "Crop type"
 --  * donations: harvest date, condition, unit, pickup/deliver, pickup point,
---    shelf life, Rejected (+ reason), Expired, and when each status happened
+--    typical and farmer-reported shelf life, Rejected (+ reason), Expired,
+--    and when each status happened
 --  * farmers: usual logistics (pickup or deliver)
 --  * farmers can delete a donation while it is still Posted
 --  * farmers can edit their own contact/farm details (not their status)
@@ -49,6 +50,8 @@ alter table public.donations add column if not exists logistics text not null de
 alter table public.donations add column if not exists use_saved_location boolean not null default true;
 alter table public.donations add column if not exists pickup_address text;  -- where to collect it
 alter table public.donations add column if not exists shelf_life_days integer;
+alter table public.donations add column if not exists farmer_shelf_life_days integer
+  check (farmer_shelf_life_days is null or farmer_shelf_life_days > 0);
 alter table public.donations add column if not exists rejection_reason text;
 alter table public.donations add column if not exists matched_at timestamptz;
 alter table public.donations add column if not exists rejected_at timestamptz;

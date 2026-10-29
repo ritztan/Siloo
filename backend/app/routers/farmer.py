@@ -19,7 +19,7 @@ UNIT_TO_KG = {"kg": 1.0, "g": 0.001, "tonne": 1000.0}
 
 DONATION_SELECT = (
     "*, crop:crops(id, name, shelf_life_days), recipient:recipients(name), "
-    "pickups(id, scheduled_at, status, volunteer:volunteers(full_name, phone))"
+    "pickups(id, scheduled_at, status)"
 )
 
 
@@ -83,6 +83,7 @@ def _donation_row(db: Client, farm: dict, body: FarmerDonationIn) -> dict:
         "quantity_kg": quantity_kg,
         "harvested_at": body.harvested_at.isoformat(),
         "shelf_life_days": crop["shelf_life_days"],
+        "farmer_shelf_life_days": body.farmer_shelf_life_days,
         "expires_at": expires.isoformat(),
         "condition": body.condition,
         "logistics": body.logistics,

@@ -46,11 +46,13 @@ _ERRORS: dict[str, tuple[int, str]] = {
     "PGRST301": (401, "Your session is invalid. Sign in again."),
     "PGRST303": (401, "Your session expired. Sign in again."),
     "PGRST116": (404, "Not found."),
+    "PGRST204": (500, "The database schema is out of date. Apply the latest Supabase migration, then try again."),
     "23503": (409, "This refers to a record that doesn't exist, or is still in use."),
     "23505": (409, "That already exists."),
     "23514": (422, "One of the values isn't allowed."),
     "23502": (422, "A required field is missing."),
     "22P02": (422, "One of the values has the wrong format."),
+    "42703": (500, "The database schema is out of date. Apply the latest Supabase migration, then try again."),
 }
 
 

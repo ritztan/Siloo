@@ -73,44 +73,18 @@ class FarmerUpdate(BaseModel):
     location: Optional[str] = None
 
 
-# ---------- volunteers ----------
-
-VehicleType = Literal["none", "motorcycle", "car", "pickup", "van", "truck"]
-
-
-class VolunteerIn(BaseModel):
-    full_name: str = Field(min_length=1)
-    email: Optional[EmailStr] = None
-    phone: Optional[str] = None
-    service_area: Optional[str] = None
-    vehicle_type: VehicleType = "none"
-    capacity_kg: Optional[Decimal] = Field(default=None, ge=0)
-    is_active: bool = True
-
-
-class VolunteerUpdate(BaseModel):
-    full_name: Optional[str] = Field(default=None, min_length=1)
-    email: Optional[EmailStr] = None
-    phone: Optional[str] = None
-    service_area: Optional[str] = None
-    vehicle_type: Optional[VehicleType] = None
-    capacity_kg: Optional[Decimal] = Field(default=None, ge=0)
-    is_active: Optional[bool] = None
-
-
 # ---------- recipients ----------
 
-RecipientType = Literal["food_bank", "kitchen", "pantry", "shelter", "rescue_partner", "other"]
+RecipientType = Literal["rescue_partner"]
 RecipientStatus = Literal["open", "limited", "closed"]
 
 
 class RecipientIn(BaseModel):
     name: str = Field(min_length=1)
-    type: RecipientType = "food_bank"
+    type: RecipientType = "rescue_partner"
     contact_name: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
-    capacity: Optional[str] = None
     needs: Optional[str] = None
     status: RecipientStatus = "open"
 
@@ -121,7 +95,6 @@ class RecipientUpdate(BaseModel):
     contact_name: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
-    capacity: Optional[str] = None
     needs: Optional[str] = None
     status: Optional[RecipientStatus] = None
 
@@ -160,6 +133,7 @@ class FarmerDonationIn(BaseModel):
     quantity: Decimal = Field(gt=0)
     unit: Unit = "kg"
     harvested_at: date
+    farmer_shelf_life_days: int = Field(gt=0)
     condition: Condition = "fresh"
     logistics: Logistics = "pickup"
     use_saved_location: bool = True
@@ -195,12 +169,10 @@ PickupStatus = Literal["scheduled", "in_progress", "completed", "cancelled"]
 class PickupIn(BaseModel):
     donation_id: UUID
     scheduled_at: datetime
-    volunteer_id: Optional[UUID] = None
 
 
 class PickupUpdate(BaseModel):
     scheduled_at: Optional[datetime] = None
-    volunteer_id: Optional[UUID] = None
     status: Optional[PickupStatus] = None
 
 

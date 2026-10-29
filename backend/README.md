@@ -13,9 +13,8 @@ Website (OLIS)  ──►  Python API (FastAPI)  ──►  Supabase (database +
 | Account | How it's created | What they can do |
 |---|---|---|
 | **Farmer** | Signs up on the website ("Create farmer account") | Starts as **pending**. Once a coordinator approves them: post surplus harvest, see where their donations go. Sees only their own farm. |
-| **Coordinator** | Created by you in Supabase (no public sign-up, see below) | Sees everything, approves/suspends farmers, manages donations, pickups, volunteers, recipients. |
+| **Coordinator** | Created by you in Supabase (no public sign-up, see below) | Sees everything, approves/suspends farmers, manages donations, pickups and recipients (including partner NGOs). |
 | **Admin** | Same as coordinator, plus can change other people's roles | |
-| **Volunteer** | Created in Supabase like a coordinator | View only (uses the coordinator login). |
 
 ```
 backend/
@@ -31,14 +30,18 @@ backend/
 │       ├── dashboard.py   ← /dashboard (coordinator dashboard)
 │       ├── reports.py     ← /reports (Reports page)
 │       ├── history.py     ← /sidebar, /activity/undo (Undo last action)
-│       ├── resources.py   ← /farmers, /volunteers, /recipients, /donations, /pickups
+│       ├── resources.py   ← /farmers, /recipients, /donations, /pickups
 │       └── crud.py        ← shared list/get/create/update/delete logic
 ├── supabase/
 │   ├── migrations/
 │   │   ├── 20261027000000_init_schema.sql      ← tables, security rules, views
 │   │   ├── 20261027100000_farmer_accounts.sql  ← farmer sign-up + farmer-only rules
-│   │   ├── 20261027200000_volunteer_recipient_details.sql  ← vehicle, service area, capacity, needs
-│   │   └── 20261027300000_farmer_portal.sql  ← crop shelf-life table, harvest/condition/logistics, rejected & expired
+│   │   ├── 20261027200000_volunteer_recipient_details.sql  ← legacy volunteer details and recipient fields
+│   │   ├── 20261027300000_farmer_portal.sql  ← crop shelf-life table, harvest/condition/logistics, rejected & expired
+│   │   ├── 20261029400000_partner_ngo_recipients.sql  ← retire volunteer assignments; add NGOs as recipients
+│   │   ├── 20261029500000_recipient_partner_types.sql  ← all recipients are NGOs; remove capacity
+│   │   ├── 20261029700000_remove_legacy_food_banks.sql  ← remove legacy demo recipients
+│   │   └── 20261029800000_farmer_reported_shelf_life.sql  ← add farmer-entered shelf life for existing databases
 │   ├── move_old_tables.sql   ← only if the project already had older Silo tables
 │   └── seed.sql              ← sample data
 ├── tests/test_smoke.py
@@ -56,7 +59,17 @@ In Supabase → **SQL Editor**, run each file in its own **New query**, in this 
 2. `supabase/migrations/20261027100000_farmer_accounts.sql`
 3. `supabase/migrations/20261027200000_volunteer_recipient_details.sql`
 4. `supabase/migrations/20261027300000_farmer_portal.sql`
-5. (Optional) `supabase/seed.sql` for sample data
+5. `supabase/migrations/20261029400000_partner_ngo_recipients.sql`
+6. `supabase/migrations/20261029500000_recipient_partner_types.sql`
+7. `supabase/migrations/20261029700000_remove_legacy_food_banks.sql`
+8. `supabase/migrations/20261029800000_farmer_reported_shelf_life.sql`
+9. (Optional) `supabase/seed.sql` for sample NGO recipient partners
+
+If migrations 1–4 are already installed, apply migrations 5–8 in order. Migration 5 removes volunteer records and pickup assignments, retires volunteer-role accounts, and preserves the known demo volunteer rows as sample partner NGO recipients rather than treating individual people as organizations.
+
+If migration 5 was already installed, apply migration 6 to classify every recipient as an NGO and remove the capacity field. Apply migration 7 to remove legacy demo recipient records, and migration 8 to add the farmer-entered shelf-life column to existing databases.
+
+If the farmer portal migration was already applied before the farmer-entered shelf-life field was added, be sure to apply migration 8. Without it, posting a donation can fail because the database is missing the new column.
 
 Then go to **Authentication → Sign In / Providers → Email** and turn off **Confirm email** while testing. Otherwise new accounts must click a link in their email before they can log in.
 
@@ -66,7 +79,7 @@ Then go to **Authentication → Sign In / Providers → Email** and turn off **C
 
 ```sql
 update public.profiles
-set role = 'admin',            -- or 'coordinator' / 'volunteer'
+set role = 'admin',            -- or 'coordinator'
     first_name = 'Carla',
     last_name  = 'Mendoza'
 where id = (select id from auth.users where email = 'carla@example.com');
@@ -128,7 +141,7 @@ npm run dev
 
 Open **http://localhost:5173**. The website talks to the API at `http://127.0.0.1:8000`. To use a different address, create `OLIS/.env` with `VITE_API_URL=...`. If the website runs somewhere other than port 5173 or 8443, add it to `CORS_ORIGINS` in `backend/.env`.
 
-**Everything is connected:** farmer sign-up, both logins, the farmer status page and farmer dashboard, and the coordinator Dashboard, Donations, Pickups, Farmers, Volunteers, Recipients and Reports pages.
+**Everything is connected:** farmer sign-up, both logins, the farmer status page and farmer dashboard, and the coordinator Dashboard, Donations, Pickups, Farmers, Recipient Partners and Reports pages.
 
 ## Endpoints
 
@@ -143,7 +156,7 @@ Open **http://localhost:5173**. The website talks to the API at `http://127.0.0.
 | GET / PATCH | `/auth/me` | Your profile, and your farm + status if you're a farmer |
 | GET | `/farmer/dashboard` | Farmer: your farm, totals, and all your donations |
 | GET | `/farmer/crops` | Crop shelf-life table (for the "Crop type" list) |
-| POST | `/farmer/donations` | Farmer: log surplus crop (`crop_id`, `quantity`, `unit`, `harvested_at`, `condition`, `logistics`, `use_saved_location`, `pickup_address`, `notes`) — approved farmers only |
+| POST | `/farmer/donations` | Farmer: log surplus crop (`crop_id`, `quantity`, `unit`, `harvested_at`, `farmer_shelf_life_days`, `condition`, `logistics`, `use_saved_location`, `pickup_address`, `notes`) — approved farmers only; remaining shelf life and expiry use the crop's typical shelf life and harvest date |
 | GET / PATCH / DELETE | `/farmer/donations/{id}` | Farmer: view; edit or delete while Posted |
 | GET / PATCH | `/farmer/profile` | Farmer: contact, farm address, usual logistics; change email / password |
 | POST | `/donations/{id}/reject` | Coordinator: reject with a `reason` the farmer sees |
@@ -151,13 +164,13 @@ Open **http://localhost:5173**. The website talks to the API at `http://127.0.0.
 | GET | `/dashboard?days=7` | Coordinator: stat cards, priority queue, activity, chart (`days=7` or `30`) |
 | GET | `/sidebar` | Coordinator sidebar: last undoable change + pending-farmers count |
 | POST | `/activity/undo` | Undo your most recent change (approve/reject, match, schedule, assign, deliver, cancel, add/edit/remove) |
-| GET | `/reports?period=30d` | Reports: totals, change vs previous period, chart, where food went, top farms/produce/food banks/volunteers (`7d`, `30d`, `12m`) |
+| GET | `/reports?period=30d` | Reports: totals, change vs previous period, chart, where food went, top farms/produce/recipients/partner NGOs (`7d`, `30d`, `12m`) |
 | GET / POST | `/farmers` | List (`?status=pending`, `?q=name`) / add |
 | POST | `/farmers/{id}/approve`, `/reject`, `/suspend` | Review a farmer account |
 | GET / POST | `/donations` | List (`?status=new`) / log a donation |
-| GET / POST | `/pickups` | List (`?day=today`, `?unassigned=true`) / schedule |
-| PATCH | `/pickups/{id}` | Assign a volunteer or set `status: "completed"` (marks the donation delivered) |
-| GET / POST | `/volunteers`, `/recipients` | List / add |
+| GET / POST | `/pickups` | List (`?day=today`) / schedule |
+| PATCH | `/pickups/{id}` | Reschedule or set `status: "completed"` (marks the donation delivered) |
+| GET / POST | `/recipients` | List / add recipient organizations, including partner NGOs |
 | GET / PATCH / DELETE | `/{table}/{id}` | View, edit, or delete one item |
 
 Every endpoint except signup/signin/refresh needs the header `Authorization: Bearer <access_token>`.

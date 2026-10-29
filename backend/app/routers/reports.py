@@ -1,4 +1,4 @@
-"""Reports: how much food the network rescued, where it went, who helped."""
+"""Reports: how much food the network rescued, where it went, and who received it."""
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -22,7 +22,7 @@ RECIPIENT_TYPES = {
     "food_bank": "Food banks",
     "pantry": "Neighborhood pantries",
     "shelter": "Shelters",
-    "rescue_partner": "Food rescue partners",
+    "rescue_partner": "Partner NGOs",
     "other": "Other partners",
 }
 
@@ -60,10 +60,6 @@ def report(period: Period = "30d", db: Client = Depends(get_db)):
             "id, produce, quantity_kg, status, created_at, delivered_at, recipient_id, "
             "farmer:farmers(farm_name), recipient:recipients(name, type)"
         )
-    )
-    pickups = run(
-        db.table("pickups").select("status, scheduled_at, volunteer:volunteers(full_name)")
-        .eq("status", "completed")
     )
     farms = run(db.table("farmers").select("id").eq("status", "approved"))
     recipients = run(db.table("recipients").select("id").neq("status", "closed"))
@@ -109,26 +105,20 @@ def report(period: Period = "30d", db: Client = Depends(get_db)):
     by_farm: Dict[str, float] = defaultdict(float)
     by_produce: Dict[str, float] = defaultdict(float)
     by_recipient: Dict[str, float] = defaultdict(float)
+    by_partner_ngo: Dict[str, float] = defaultdict(float)
     for d in current:
         q = float(d["quantity_kg"])
         recipient = d.get("recipient") or {}
         by_type[RECIPIENT_TYPES.get(recipient.get("type") or "other", "Other partners")] += q
         by_recipient[recipient.get("name") or "Unknown"] += q
+        if recipient.get("type") == "rescue_partner":
+            by_partner_ngo[recipient.get("name") or "Unknown"] += q
         by_farm[(d.get("farmer") or {}).get("farm_name") or "Unknown farm"] += q
         by_produce[d["produce"].strip().capitalize()] += q
 
     where = [
         {"name": name, "kg": round(value, 2), "percent": round(value / kg * 100) if kg else 0}
         for name, value in sorted(by_type.items(), key=lambda item: item[1], reverse=True)
-    ]
-
-    volunteer_counts: Dict[str, int] = defaultdict(int)
-    for p in pickups:
-        if (_local_day(p["scheduled_at"]) or date.min) >= start and p.get("volunteer"):
-            volunteer_counts[p["volunteer"]["full_name"]] += 1
-    top_volunteers = [
-        {"name": name, "pickups": count}
-        for name, count in sorted(volunteer_counts.items(), key=lambda item: item[1], reverse=True)[:5]
     ]
 
     return {
@@ -152,5 +142,5 @@ def report(period: Period = "30d", db: Client = Depends(get_db)):
         "top_farms": _top(by_farm),
         "top_produce": _top(by_produce),
         "top_recipients": _top(by_recipient),
-        "top_volunteers": top_volunteers,
+        "top_partner_ngos": _top(by_partner_ngo),
     }

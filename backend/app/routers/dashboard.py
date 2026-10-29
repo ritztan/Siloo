@@ -35,8 +35,6 @@ def dashboard(days: int = 7, db: Client = Depends(get_db)):
         item for item in [
             {"type": "farmers_pending", "count": stats.get("farmers_pending", 0),
              "title": "farmers waiting", "detail": "Review new account applications"},
-            {"type": "pickups_unassigned", "count": stats.get("pickups_unassigned", 0),
-             "title": "pickups unassigned", "detail": "Assign a volunteer"},
             {"type": "donations_expiring", "count": stats.get("donations_expiring", 0),
              "title": "donations expiring", "detail": "Find a recipient within 4 hours"},
         ] if item["count"]

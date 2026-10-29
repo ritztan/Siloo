@@ -2,7 +2,7 @@
 
 > *Every harvest has a home.*
 
-Silo is a web system that moves **surplus harvest from local farms to food banks, community kitchens and pantries** before it spoils. Farmers post the produce they can't sell, a coordinator matches it to a food bank, a volunteer picks it up, and the system keeps a record of every kilogram rescued.
+Silo is a web system that moves **surplus harvest from local farms to food banks, community kitchens, pantries and partner NGOs** before it spoils. Farmers post the produce they can't sell, a coordinator matches it to a recipient and schedules its pickup, and the system keeps a record of every kilogram rescued.
 
 ---
 
@@ -36,22 +36,22 @@ flowchart LR
 |---|---|
 | **Frontend** (the website) | What people see and click: login, sign-up, dashboards, tables, forms, charts. It never talks to the database directly. |
 | **Backend** (the Python API) | The "brain". Receives requests from the website, checks who is asking, applies the rules (e.g. a pickup that is completed marks the donation as delivered), calculates reports, and reads/writes the database. |
-| **Database** (Supabase) | Stores everything: accounts, farms, donations, pickups, volunteers, food banks, and the undo history. It also enforces security rules so each person only sees what they're allowed to. |
+| **Database** (Supabase) | Stores accounts, farms, donations, pickups, recipients (including partner NGOs), and undo history. It also enforces security rules so each person only sees what they're allowed to. |
 
 There are two kinds of users, each with their own login and dashboard:
 
 | Role | How the account is made | What they can do |
 |---|---|---|
 | **Farmer** (donor) | Signs up on the website. Starts as **Pending** until a coordinator approves. | Use the **Farmer portal** (Home, Log surplus, My donations, Farm profile): log surplus crops, follow each donation's status history, edit or delete it while Posted, keep their farm address and contact details up to date. Sees **only their own farm**. |
-| **Coordinator** (admin) | Created by the operating office (barangay, city agriculture office, NGO or food bank network) in Supabase. No public sign-up. | Approve/reject/suspend farmers, match donations to food banks, schedule pickups, assign volunteers, manage volunteers and recipients, view reports, undo mistakes. |
+| **Coordinator** (admin) | Created by the operating office (barangay, city agriculture office, NGO or food bank network) in Supabase. No public sign-up. | Approve/reject/suspend farmers, match donations to recipients, schedule pickups, manage recipients (including partner NGOs), view reports, undo mistakes. |
 
 The farmer portal:
 
 | Page | Purpose |
 |---|---|
 | **Home** | Totals (active, next pickup, received, kg rescued) and recent donations. |
-| **Log surplus** | Crop type (from the crop **shelf-life table**), quantity and unit, harvest date, condition, saved farm address or a different pickup address, *I need pickup* / *I can deliver*, notes. "Before you post" shows the shelf life and days remaining. |
-| **My donations** | Filters with counts (All, Posted, Matched, Received, Rejected, Expired), a table, and a detail panel with status history. Edit/Delete while Posted; shows the food bank's reason when Rejected. |
+| **Log surplus** | Crop type (from the crop **shelf-life table**), quantity and unit, harvest date, farmer-entered shelf life in days, condition, saved farm address or a different pickup address, *I need pickup* / *I can deliver*, notes. Remaining shelf life and expiry are calculated from the crop's typical shelf life and harvest date. |
+| **My donations** | Filters with counts (All, Posted, Matched, Received, Rejected, Expired), a table, and a detail panel with status history. Edit/Delete while Posted; shows the recipient's reason when Rejected. |
 | **Farm profile** | Contact details, farm name and address, usual logistics, and changing email or password. |
 
 The coordinator's pages:
@@ -59,12 +59,11 @@ The coordinator's pages:
 | Page | Purpose |
 |---|---|
 | **Dashboard** | Today at a glance: active donations, pickups today, farmers waiting for review, food rescued, a priority queue and a rescue-volume chart. |
-| **Donations** | Every donation. Match it to a food bank, schedule its pickup (or mark it **received** when the farmer delivers), or **reject** it with a reason the farmer sees. |
-| **Pickups** | The pickup schedule. Assign or change the volunteer, reschedule, mark delivered, or cancel. |
+| **Donations** | Every donation. Match it to a recipient, schedule its pickup (or mark it **received** when the farmer delivers), or **reject** it with a reason the farmer sees. |
+| **Pickups** | The pickup schedule. Reschedule, mark delivered, or cancel. |
 | **Farmers** | New applications and partner farms. Approve, reject, suspend or reactivate. |
-| **Volunteers** | Drivers and helpers: service area, vehicle and capacity, on/off duty. |
-| **Recipients** | Food banks, kitchens and pantries: capacity, priority needs, open / limited / closed. |
-| **Reports** | Kilograms rescued over 7 days, 30 days or 12 months, where the food went, top farms, produce, food banks and volunteers. |
+| **Recipient Partners** | NGO partners: location, priority needs, and open / limited / closed status. |
+| **Reports** | Kilograms rescued over 7 days, 30 days or 12 months, where the food went, top farms, produce, recipients and partner NGOs. |
 
 Other features: **Undo last action** (in the coordinator sidebar), **Forgot password** (both logins), pages that **refresh on their own** every 30 seconds, and a design that works on **phones**.
 
@@ -104,7 +103,7 @@ Other features: **Undo last action** (in the coordinator sidebar), **Forgot pass
 
 ## 3. The flow of the system
 
-### The main flow: from surplus harvest to a food bank
+### The main flow: from surplus harvest to a recipient
 
 ```mermaid
 flowchart TD
@@ -113,26 +112,26 @@ flowchart TD
     C -- Reject --> R["Rejected<br/>(can be reactivated later)"]
     C -- Approve --> D["3. Farmer logs surplus crop<br/>(crop, quantity, harvest date, pickup or deliver)"]
     D --> E["Donation: POSTED<br/>(expires after the crop's shelf life)"]
-    E --> F["4. Coordinator matches it<br/>to an open food bank"]
+    E --> F["4. Coordinator matches it<br/>to an open recipient"]
     F --> G["Donation: MATCHED"]
-    G --> H["5. Needs pickup: coordinator schedules it<br/>and assigns a volunteer"]
+    G --> H["5. Needs pickup: coordinator schedules it"]
     G --> H2["5. Farmer delivers it themselves"]
     H --> I["Donation: PICKUP SCHEDULED"]
-    I --> J["6. Volunteer delivers;<br/>coordinator marks it Done"]
+    I --> J["6. Coordinator marks it delivered"]
     H2 --> J2["6. Coordinator marks it Received"]
     J --> K["Donation: RECEIVED ✔"]
     J2 --> K
     K --> L["7. Totals update everywhere:<br/>farmer dashboard, coordinator dashboard, Reports"]
 ```
 
-At every step the **farmer sees the update on their own dashboard** (which food bank, pickup time, volunteer, delivered).
+At every step the **farmer sees the update on their own dashboard** (recipient, pickup time, delivered).
 
 ### Donation status
 
 ```mermaid
 stateDiagram-v2
     [*] --> Posted: farmer logs surplus
-    Posted --> Matched: matched to a food bank
+    Posted --> Matched: matched to a recipient
     Posted --> Rejected: rejected (with reason)
     Posted --> Expired: shelf life ran out
     Posted --> [*]: farmer deletes it
@@ -170,9 +169,8 @@ sequenceDiagram
 | Who | How Silo helps |
 |---|---|
 | **Farmers** | Surplus or unsold harvest goes to people instead of rotting in the field. Posting takes a minute, and they can see exactly where their produce went and how much they've contributed. |
-| **Food banks, community kitchens, pantries, shelters** | Get a steady supply of fresh produce matched to what they need and can handle (priority needs, capacity, open / limited / closed). |
+| **NGO partners** | Get a steady supply of fresh produce matched to priority needs and open / limited / closed status. |
 | **Families and individuals they serve** | More fresh fruits and vegetables in meals. Reports estimate the meals provided (about 0.5 kg of produce per meal). |
-| **Volunteers** | A clear schedule: what to pick up, where, when, and where to deliver it. Coordinators only assign volunteers who are on duty. |
 | **Coordinators** (barangay, city agriculture office, NGO, food bank network) | One place to run everything instead of calls and spreadsheets: a priority queue, ready-made reports for meetings and funding, and Undo for mistakes. |
 | **The community and environment** | Less food waste going to landfill, and a record of how many kilograms were rescued. |
 
@@ -195,20 +193,18 @@ erDiagram
     CROPS ||--o{ DONATIONS : "shelf life of"
     RECIPIENTS ||--o{ DONATIONS : "receives"
     DONATIONS ||--o{ PICKUPS : "picked up by"
-    VOLUNTEERS ||--o{ PICKUPS : "assigned to"
     PROFILES ||--o{ ACTIVITY_LOG : "made change"
 ```
 
 | Table | What it stores |
 |---|---|
 | `auth.users` | Login accounts (managed by Supabase Auth). |
-| `profiles` | Name, phone, organization and **role** (`farmer`, `coordinator`, `admin`, `volunteer`). |
+| `profiles` | Name, phone, organization and **role** (`farmer`, `coordinator`, `admin`); legacy volunteer accounts are retired. |
 | `farmers` | Farm name, contact, address, cooperative, usual logistics, status (`pending`, `approved`, `rejected`, `suspended`). |
 | `crops` | The crop **shelf-life table** (e.g. Pechay 3 days, Tomatoes 7 days) behind the "Crop type" list. |
-| `donations` | Crop, quantity and unit, kg, harvest date, condition, pickup or deliver, pickup address, expiry, food bank, rejection reason, status (`new` = Posted, `matched`, `pickup_scheduled`, `delivered` = Received, `rejected`, `expired`) and when each happened. |
-| `pickups` | Which donation, scheduled time, volunteer, status (`scheduled`, `completed`, `cancelled`). |
-| `volunteers` | Name, phone, service area, vehicle, capacity in kg, on/off duty. |
-| `recipients` | Food banks / kitchens / pantries: type, location, capacity, needs, open / limited / closed. |
+| `donations` | Crop, quantity and unit, kg, harvest date, condition, pickup or deliver, pickup address, expiry, recipient, rejection reason, status (`new` = Posted, `matched`, `pickup_scheduled`, `delivered` = Received, `rejected`, `expired`) and when each happened. |
+| `pickups` | Which donation, scheduled time and status (`scheduled`, `completed`, `cancelled`). |
+| `recipients` | NGO partners: location, needs, open / limited / closed. Partner type is Non-governmental organization. |
 | `activity_log` | Each coordinator change and what the record looked like before it (used by **Undo**). |
 
 Views (saved queries) used by the Dashboard: `dashboard_stats`, `donation_activity`, `rescue_volume_daily`.
@@ -262,7 +258,7 @@ That is why the security lives in the database itself, not only in the website:
 | Rule (from the migrations) | Effect |
 |---|---|
 | Farmers see their own farm, donations and pickups only | Even if someone edits the website, a farmer can't load other farms' data. |
-| Only coordinators/admins can add, edit or delete | Volunteers' accounts are view-only. |
+| Only coordinators/admins can add, edit or delete | Legacy volunteer accounts have been retired. |
 | Approved farmers can post donations for their own farm only | Pending or suspended farmers can't post. |
 | Nobody can give themselves a different role | Roles are changed only by an admin or in the Supabase dashboard. |
 
@@ -283,8 +279,8 @@ Silo sorts data in three places. We use the sorting built into each language rat
 
 | Where | What is sorted | How (code) | Algorithm behind it |
 |---|---|---|---|
-| **Database** (PostgreSQL) | Lists shown on pages: newest donations/farmers/volunteers first, pickups by scheduled time, the farmer's donations, the dashboard activity feed, the chart by day | `.order("created_at", desc=True)` in `crud.py` and `farmer.py`, `.order("scheduled_at")` in `resources.py`, `ORDER BY` in the dashboard views | **Quicksort** when the rows fit in memory, **external merge sort** for very large results, and **top-N heapsort** when combined with `LIMIT` (e.g. "latest 8 activities"). PostgreSQL chooses automatically. |
-| **Backend** (Python) | Reports: top farms, produce and food banks by kg; volunteers by number of pickups; "where it went" by kg; the farmer's next pickup | `sorted(..., key=..., reverse=True)` in `reports.py` and `farmer.py` | **Timsort** — a hybrid of **merge sort** and **insertion sort**. Stable and *O(n log n)*. |
+| **Database** (PostgreSQL) | Lists shown on pages: newest donations and farmers first, pickups by scheduled time, recipients, the farmer's donations, the dashboard activity feed, the chart by day | `.order("created_at", desc=True)` in `crud.py` and `farmer.py`, `.order("scheduled_at")` in `resources.py`, `ORDER BY` in the dashboard views | **Quicksort** when the rows fit in memory, **external merge sort** for very large results, and **top-N heapsort** when combined with `LIMIT` (e.g. "latest 8 activities"). PostgreSQL chooses automatically. |
+| **Backend** (Python) | Reports: top farms, produce, recipients and partner NGOs by kg; "where it went" by kg; the farmer's next pickup | `sorted(..., key=..., reverse=True)` in `reports.py` and `farmer.py` | **Timsort** — a hybrid of **merge sort** and **insertion sort**. Stable and *O(n log n)*. |
 | **Frontend** (TypeScript) | The next upcoming pickup for a donation; most-donated produce on the Farmers page | `.sort((a, b) => …)` in `App.tsx` | **Timsort** as well (used by the V8 JavaScript engine in Chrome, Brave and Edge for `Array.prototype.sort`). |
 
 Example from `backend/app/routers/reports.py` — ranking top farms by kilograms donated:

@@ -10,6 +10,7 @@ import {
 import {
   api,
   ApiError,
+  clearTokens,
   formatDateTime,
   formatJoined,
   formatKg,
@@ -39,7 +40,6 @@ type Screen =
   | "donations"
   | "pickups"
   | "farmers"
-  | "volunteers"
   | "recipients"
   | "reports"
   | "farmer-status"
@@ -94,8 +94,8 @@ function homeFor(account: Account): Screen {
 const ROLE_LABELS: Record<string, string> = {
   admin: "Coordinator · Admin",
   coordinator: "Coordinator",
-  volunteer: "Volunteer · View only",
   farmer: "Farmer",
+  retired: "Account inactive",
 }
 
 // Reload a page's data every 30 seconds and whenever you come back to the tab,
@@ -255,13 +255,8 @@ const NAV_ITEMS: NavItem[] = [
     group: "Community",
   },
   {
-    screen: "volunteers",
-    label: "Volunteers",
-    icon: "users",
-  },
-  {
     screen: "recipients",
-    label: "Recipients",
+    label: "Recipient Partners",
     icon: "home",
   },
   {
@@ -451,7 +446,7 @@ function AppShell({
             </div>
 
             <button type="button" onClick={handleSignOut}>
-              {profile?.role === "farmer" ? "Log out" : "Sign out"}
+              Sign out
             </button>
           </div>
         </div>
@@ -579,8 +574,10 @@ function SplashScreen({ go }: { go: (s: Screen) => void }) {
 
     Promise.all([restore, minimumWait]).then(([account]) => {
       if (cancelled) return
-      setAccount(account)
-      go(account ? homeFor(account) : "signin")
+      const activeAccount = account?.profile.role === "retired" ? null : account
+      if (!activeAccount && account) clearTokens()
+      setAccount(activeAccount)
+      go(activeAccount ? homeFor(activeAccount) : "signin")
     })
 
     return () => {
@@ -1173,7 +1170,7 @@ function SignUpScreen({ go }: { go: (s: Screen) => void }) {
               <input required type="checkbox" />
               <span>
                 I agree that Silo only coordinates donations and the receiving
-                food bank decides whether to accept produce.
+                organization decides whether to accept produce.
               </span>
             </label>
             <div className="signup-actions">
@@ -1252,7 +1249,6 @@ type DashboardData = {
 
 const QUEUE_LOOK: Record<string, { icon: IconName; className: string; screen: Screen }> = {
   farmers_pending: { icon: "shield", className: "", screen: "farmers" },
-  pickups_unassigned: { icon: "clock", className: "amber-bg", screen: "pickups" },
   donations_expiring: { icon: "gift", className: "blue-bg", screen: "donations" },
 }
 
@@ -1626,7 +1622,7 @@ type DonationRecord = {
   created_at: string
   farmer: { id: string; farm_name: string } | null
   recipient: { id: string; name: string } | null
-  pickups: { id: string; scheduled_at: string; status: string; volunteer_id: string | null }[]
+  pickups: { id: string; scheduled_at: string; status: string }[]
   logistics?: "pickup" | "deliver"
   condition?: "fresh" | "good" | "fair" | null
   pickup_address?: string | null
@@ -1634,7 +1630,6 @@ type DonationRecord = {
 }
 
 type RecipientRecord = { id: string; name: string; type: string; address: string | null; status: string }
-type VolunteerRecord = { id: string; full_name: string; phone: string | null; is_active: boolean }
 
 const canManageOps = (account: Account | null) =>
   account?.profile.role === "admin" || account?.profile.role === "coordinator"
@@ -1668,7 +1663,6 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
   const [donations, setDonations] = useState<DonationRecord[] | null>(null)
   const [farms, setFarms] = useState<Farm[]>([])
   const [recipients, setRecipients] = useState<RecipientRecord[]>([])
-  const [volunteers, setVolunteers] = useState<VolunteerRecord[]>([])
   const [error, setError] = useState("")
   // Which form is open: logging a new donation, or acting on one donation
   const [panel, setPanel] = useState<
@@ -1686,7 +1680,6 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
   const [quantity, setQuantity] = useState("")
   const [recipientId, setRecipientId] = useState("")
   const [pickupAt, setPickupAt] = useState("")
-  const [volunteerId, setVolunteerId] = useState("")
   const [reason, setReason] = useState("")
 
   const load = useCallback(() => {
@@ -1695,13 +1688,11 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
       api.get<DonationRecord[]>("/donations?limit=500"),
       api.get<Farm[]>("/farmers?status=approved&limit=500"),
       api.get<RecipientRecord[]>("/recipients?limit=500"),
-      api.get<VolunteerRecord[]>("/volunteers?limit=500"),
     ])
-      .then(([donationRows, farmRows, recipientRows, volunteerRows]) => {
+      .then(([donationRows, farmRows, recipientRows]) => {
         setDonations(donationRows)
         setFarms(farmRows)
         setRecipients(recipientRows.filter((recipient) => recipient.status !== "closed"))
-        setVolunteers(volunteerRows.filter((volunteer) => volunteer.is_active))
       })
       .catch((err) => setError(errorText(err)))
   }, [])
@@ -1716,7 +1707,6 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
     if (next?.kind === "match") setRecipientId(next.donation.recipient?.id ?? recipients[0]?.id ?? "")
     if (next?.kind === "schedule") {
       setPickupAt(localDateTime(2))
-      setVolunteerId("")
     }
     if (next?.kind === "reject") setReason("")
     window.scrollTo({ top: 0, behavior: "smooth" })
@@ -1766,7 +1756,6 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
       await api.post("/pickups", {
         donation_id: donation.id,
         scheduled_at: new Date(pickupAt).toISOString(),
-        volunteer_id: volunteerId || null,
       })
       return `Pickup scheduled for ${formatDateTime(new Date(pickupAt).toISOString())}.`
     })
@@ -1781,7 +1770,7 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
   }
 
   const markReceived = (donation: DonationRecord) => {
-    if (!window.confirm(`Mark ${donation.produce} as received by ${donation.recipient?.name ?? "the food bank"}?`)) return
+    if (!window.confirm(`Mark ${donation.produce} as received by ${donation.recipient?.name ?? "the recipient"}?`)) return
     run(async () => {
       await api.post(`/donations/${donation.id}/receive`)
       return `${donation.produce} received. Nice work!`
@@ -1955,7 +1944,7 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
               <small className="form-sub">{panel.donation.farmer?.farm_name}</small>
             </div>
             <label>
-              Send to food bank
+              Send to recipient
               <select required value={recipientId} onChange={(event) => setRecipientId(event.target.value)}>
                 {recipients.length === 0 && <option value="">No recipients yet</option>}
                 {recipients.map((recipient) => (
@@ -1994,17 +1983,6 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
                 value={pickupAt}
                 onChange={(event) => setPickupAt(event.target.value)}
               />
-            </label>
-            <label>
-              Volunteer (optional)
-              <select value={volunteerId} onChange={(event) => setVolunteerId(event.target.value)}>
-                <option value="">Assign later</option>
-                {volunteers.map((volunteer) => (
-                  <option key={volunteer.id} value={volunteer.id}>
-                    {volunteer.full_name}
-                  </option>
-                ))}
-              </select>
             </label>
             <button type="button" className="outline-action" onClick={() => setPanel(null)}>
               Close
@@ -2170,7 +2148,6 @@ type PickupRecord = {
   id: string
   scheduled_at: string
   status: "scheduled" | "in_progress" | "completed" | "cancelled"
-  volunteer_id: string | null
   donation: {
     id: string
     produce: string
@@ -2179,14 +2156,13 @@ type PickupRecord = {
     farmer: { farm_name: string } | null
     recipient: { name: string } | null
   } | null
-  volunteer: { id: string; full_name: string; phone: string | null } | null
 }
 
 function pickupStatus(pickup: PickupRecord): { label: string; tone: ActivityTone } {
   if (pickup.status === "completed") return { label: "Delivered", tone: "dark" }
   if (pickup.status === "cancelled") return { label: "Cancelled", tone: "dark" }
   if (pickup.status === "in_progress") return { label: "On the way", tone: "blue" }
-  return pickup.volunteer ? { label: "Confirmed", tone: "green" } : { label: "Needs volunteer", tone: "amber" }
+  return { label: "Scheduled", tone: "green" }
 }
 
 function PickupsScreen({ go }: { go: (s: Screen) => void }) {
@@ -2195,24 +2171,16 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
   const [search, setSearch] = useState("")
   const [filter, setFilter] = useState("Upcoming")
   const [pickups, setPickups] = useState<PickupRecord[] | null>(null)
-  const [volunteers, setVolunteers] = useState<VolunteerRecord[]>([])
   const [error, setError] = useState("")
   const [selected, setSelected] = useState<PickupRecord | null>(null)
-  const [volunteerId, setVolunteerId] = useState("")
   const [pickupAt, setPickupAt] = useState("")
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null)
 
   const load = useCallback(() => {
     setError("")
-    Promise.all([
-      api.get<PickupRecord[]>("/pickups"),
-      api.get<VolunteerRecord[]>("/volunteers?limit=500"),
-    ])
-      .then(([pickupRows, volunteerRows]) => {
-        setPickups(pickupRows)
-        setVolunteers(volunteerRows.filter((volunteer) => volunteer.is_active))
-      })
+    api.get<PickupRecord[]>("/pickups")
+      .then(setPickups)
       .catch((err) => setError(errorText(err)))
   }, [])
 
@@ -2222,7 +2190,6 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
   const manage = (pickup: PickupRecord) => {
     setMessage(null)
     setSelected(pickup)
-    setVolunteerId(pickup.volunteer_id ?? "")
     const date = new Date(pickup.scheduled_at)
     const pad = (n: number) => String(n).padStart(2, "0")
     setPickupAt(`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`)
@@ -2250,18 +2217,15 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
   const saveChanges = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!selected) return
-    const volunteer = volunteers.find((v) => v.id === volunteerId)
     update(
       selected,
-      { volunteer_id: volunteerId || null, scheduled_at: new Date(pickupAt).toISOString() },
-      volunteer
-        ? `${volunteer.full_name} will pick up ${label(selected)}.`
-        : `Saved. ${label(selected)} still needs a volunteer.`,
+      { scheduled_at: new Date(pickupAt).toISOString() },
+      `Pickup rescheduled for ${formatDateTime(new Date(pickupAt).toISOString())}.`,
     )
   }
 
   const markDelivered = (pickup: PickupRecord) => {
-    if (!window.confirm(`Mark ${label(pickup)} as delivered to ${pickup.donation?.recipient?.name ?? "the food bank"}?`)) return
+    if (!window.confirm(`Mark ${label(pickup)} as delivered to ${pickup.donation?.recipient?.name ?? "the recipient"}?`)) return
     update(pickup, { status: "completed" }, `${label(pickup)} delivered. Nice work!`)
   }
 
@@ -2275,7 +2239,6 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
   const today = all.filter((p) => p.status !== "cancelled" && isToday(p.scheduled_at))
   const upcoming = open.filter((p) => new Date(p.scheduled_at) >= new Date(Date.now() - 3600_000))
   const nextOne = upcoming[0]
-  const needVolunteer = open.filter((p) => !p.volunteer)
   const weekAgo = Date.now() - 7 * 86400_000
   const completedWeek = all.filter((p) => p.status === "completed" && new Date(p.scheduled_at).getTime() >= weekAgo)
   const kgWeek = completedWeek.reduce((sum, p) => sum + Number(p.donation?.quantity_kg ?? 0), 0)
@@ -2285,14 +2248,12 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
     const matchesFilter =
       filter === "Upcoming"
         ? pickup.status === "scheduled" || pickup.status === "in_progress"
-        : filter === "Needs volunteer"
-          ? (pickup.status === "scheduled" || pickup.status === "in_progress") && !pickup.volunteer
-          : filter === "Delivered"
-            ? pickup.status === "completed"
-            : true
+        : filter === "Delivered"
+          ? pickup.status === "completed"
+          : true
     return (
       matchesFilter &&
-      `${pickup.donation?.farmer?.farm_name ?? ""} ${pickup.donation?.produce ?? ""} ${pickup.donation?.recipient?.name ?? ""} ${pickup.volunteer?.full_name ?? ""}`
+      `${pickup.donation?.farmer?.farm_name ?? ""} ${pickup.donation?.produce ?? ""} ${pickup.donation?.recipient?.name ?? ""}`
         .toLowerCase()
         .includes(search.toLowerCase())
     )
@@ -2305,14 +2266,14 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
           <div>
             <p className="eyebrow">Food operations</p>
             <h1>Pickups</h1>
-            <p>Scheduled pickups and the volunteers assigned to them.</p>
+            <p>Scheduled pickups and delivery status.</p>
           </div>
           <button
             type="button"
             className="primary-action"
-            onClick={() => setFilter("Needs volunteer")}
+            onClick={() => go("donations")}
           >
-            {canManage ? "+ Assign a volunteer" : "Needs volunteer"}
+            {canManage ? "Schedule a pickup" : "View donations"}
           </button>
         </section>
 
@@ -2335,10 +2296,10 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
               tone: "mint",
             },
             {
-              label: "Need a volunteer",
-              value: pickups ? String(needVolunteer.length) : "…",
-              detail: needVolunteer.length ? "Assign before pickup time" : "All covered",
-              icon: "users",
+              label: "Active pickups",
+              value: pickups ? String(open.length) : "…",
+              detail: "Scheduled or in progress",
+              icon: "truck",
               tone: "cream",
             },
             {
@@ -2373,18 +2334,6 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
                 {selected.donation?.farmer?.farm_name} → {selected.donation?.recipient?.name}
               </small>
             </div>
-            <label>
-              Volunteer
-              <select value={volunteerId} onChange={(event) => setVolunteerId(event.target.value)}>
-                <option value="">Unassigned</option>
-                {volunteers.map((volunteer) => (
-                  <option key={volunteer.id} value={volunteer.id}>
-                    {volunteer.full_name}
-                    {volunteer.phone ? ` · ${volunteer.phone}` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
             <label>
               Pickup time
               <input
@@ -2427,7 +2376,7 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
           <ListToolbar
             search={search}
             onSearch={setSearch}
-            filters={["Upcoming", "Needs volunteer", "Delivered", "All"]}
+            filters={["Upcoming", "Delivered", "All"]}
             activeFilter={filter}
             onFilter={setFilter}
           />
@@ -2437,7 +2386,6 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
                 <span>Pickup</span>
                 <span>Donation</span>
                 <span>Recipient</span>
-                <span>Volunteer</span>
                 <span>Status</span>
                 <span></span>
               </div>
@@ -2457,18 +2405,15 @@ function PickupsScreen({ go }: { go: (s: Screen) => void }) {
                     </div>
                     <span>{label(pickup)}</span>
                     <span>{pickup.donation?.recipient?.name ?? "—"}</span>
-                    <span title={pickup.volunteer?.phone ?? ""}>{pickup.volunteer?.full_name ?? "Unassigned"}</span>
                     <StatusPill label={status.label} tone={status.tone} />
                     {canManage && isOpen ? (
                       <div className="row-actions">
                         <button type="button" className="row-action" onClick={() => manage(pickup)}>
-                          {pickup.volunteer ? "Manage" : "Assign"}
+                          Manage
                         </button>
-                        {pickup.volunteer && (
-                          <button type="button" className="row-action" disabled={saving} onClick={() => markDelivered(pickup)}>
-                            Done
-                          </button>
-                        )}
+                        <button type="button" className="row-action" disabled={saving} onClick={() => markDelivered(pickup)}>
+                          Done
+                        </button>
                       </div>
                     ) : (
                       <span className="muted-cell">—</span>
@@ -2738,532 +2683,26 @@ function FarmersScreen({ go }: { go: (s: Screen) => void }) {
   )
 }
 
-// ── Volunteers Screen ─────────────────────────────────────────────────────────
-type VehicleType = "none" | "motorcycle" | "car" | "pickup" | "van" | "truck"
-
-type VolunteerFull = VolunteerRecord & {
-  email: string | null
-  service_area: string | null
-  vehicle_type: VehicleType
-  capacity_kg: number | string | null
-  pickups: { status: string; scheduled_at: string }[]
-}
-
-const VEHICLES: Record<VehicleType, string> = {
-  none: "No vehicle",
-  motorcycle: "Motorcycle",
-  car: "Car",
-  pickup: "Pickup truck",
-  van: "Van",
-  truck: "Truck",
-}
-
-function vehicleText(volunteer: VolunteerFull) {
-  const name = VEHICLES[volunteer.vehicle_type] ?? "No vehicle"
-  return volunteer.vehicle_type !== "none" && volunteer.capacity_kg
-    ? `${name} · ${formatKg(volunteer.capacity_kg)} kg`
-    : name
-}
-
-function volunteerToday(volunteer: VolunteerFull): { label: string; tone: ActivityTone } {
-  if (!volunteer.is_active) return { label: "Off duty", tone: "dark" }
-  const busy = volunteer.pickups.some(
-    (pickup) =>
-      pickup.status === "in_progress" ||
-      (pickup.status === "scheduled" && isToday(pickup.scheduled_at)),
-  )
-  return busy ? { label: "On a pickup", tone: "blue" } : { label: "Available", tone: "green" }
-}
-
-type VolunteerForm = {
-  full_name: string
-  phone: string
-  email: string
-  service_area: string
-  vehicle_type: VehicleType
-  capacity_kg: string
-}
-
-const emptyVolunteer: VolunteerForm = {
-  full_name: "",
-  phone: "",
-  email: "",
-  service_area: "",
-  vehicle_type: "none",
-  capacity_kg: "",
-}
-
-function volunteerBody(form: VolunteerForm) {
-  return {
-    full_name: form.full_name.trim(),
-    phone: form.phone.trim() || null,
-    email: form.email.trim() || null,
-    service_area: form.service_area.trim() || null,
-    vehicle_type: form.vehicle_type,
-    capacity_kg: form.vehicle_type === "none" || !form.capacity_kg ? null : Number(form.capacity_kg),
-  }
-}
-
-function VolunteersScreen({ go }: { go: (s: Screen) => void }) {
-  const { account } = useSession()
-  const canManage = canManageOps(account)
-  const [search, setSearch] = useState("")
-  const [filter, setFilter] = useState("All volunteers")
-  const [volunteers, setVolunteers] = useState<VolunteerFull[] | null>(null)
-  const [error, setError] = useState("")
-  const [showInviteForm, setShowInviteForm] = useState(false)
-  const [form, setForm] = useState<VolunteerForm>(emptyVolunteer)
-  const [selected, setSelected] = useState<VolunteerFull | null>(null)
-  const [editing, setEditing] = useState(false)
-  const [editForm, setEditForm] = useState<VolunteerForm>(emptyVolunteer)
-  const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState<{ kind: "error" | "success"; text: string } | null>(null)
-
-  const load = useCallback(() => {
-    setError("")
-    api
-      .get<VolunteerFull[]>("/volunteers?limit=500")
-      .then((rows) => {
-        setVolunteers(rows)
-        // keep an open profile in sync
-        setSelected((current) => (current ? rows.find((row) => row.id === current.id) ?? null : null))
-      })
-      .catch((err) => setError(errorText(err)))
-  }, [])
-
-  useEffect(load, [load])
-  useAutoRefresh(load)
-
-  const save = async (work: () => Promise<unknown>, text: string, after?: () => void) => {
-    setSaving(true)
-    setMessage(null)
-    try {
-      await work()
-      after?.()
-      setMessage({ kind: "success", text })
-      load()
-    } catch (err) {
-      setMessage({ kind: "error", text: errorText(err) })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const addVolunteer = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const name = form.full_name.trim()
-    save(() => api.post("/volunteers", volunteerBody(form)), `Added ${name} to the roster.`, () => {
-      setForm(emptyVolunteer)
-      setShowInviteForm(false)
-      setFilter("All volunteers")
-      setSearch("")
-    })
-  }
-
-  const openProfile = (volunteer: VolunteerFull) => {
-    setMessage(null)
-    setEditing(false)
-    setSelected(volunteer)
-    setEditForm({
-      full_name: volunteer.full_name,
-      phone: volunteer.phone ?? "",
-      email: volunteer.email ?? "",
-      service_area: volunteer.service_area ?? "",
-      vehicle_type: volunteer.vehicle_type,
-      capacity_kg: volunteer.capacity_kg ? String(Number(volunteer.capacity_kg)) : "",
-    })
-  }
-
-  const saveEdit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!selected) return
-    save(() => api.patch(`/volunteers/${selected.id}`, volunteerBody(editForm)), "Saved.", () => setEditing(false))
-  }
-
-  const toggleDuty = (volunteer: VolunteerFull) =>
-    save(
-      () => api.patch(`/volunteers/${volunteer.id}`, { is_active: !volunteer.is_active }),
-      volunteer.is_active
-        ? `${volunteer.full_name} is off duty and won't be offered for new pickups.`
-        : `${volunteer.full_name} is back on duty.`,
-    )
-
-  const remove = (volunteer: VolunteerFull) => {
-    if (!window.confirm(`Remove ${volunteer.full_name} from the roster? Their past pickups stay in the records.`)) return
-    save(() => api.delete(`/volunteers/${volunteer.id}`), `Removed ${volunteer.full_name}.`, () => setSelected(null))
-  }
-
-  const all = volunteers ?? []
-  const active = all.filter((v) => v.is_active)
-  const areas = new Set(active.map((v) => v.service_area?.trim()).filter(Boolean))
-  const availableToday = all.filter((v) => volunteerToday(v).label === "Available").length
-  const completedThisMonth = all
-    .flatMap((v) => v.pickups)
-    .filter((p) => p.status === "completed" && thisMonth(p.scheduled_at)).length
-  const withVehicle = active.filter((v) => v.vehicle_type !== "none")
-  const vehicleCounts = Object.entries(
-    withVehicle.reduce<Record<string, number>>((counts, v) => {
-      counts[v.vehicle_type] = (counts[v.vehicle_type] ?? 0) + 1
-      return counts
-    }, {}),
-  )
-    .map(([type, count]) => `${count} ${VEHICLES[type as VehicleType].toLowerCase()}${count === 1 ? "" : "s"}`)
-    .join(" · ")
-
-  const filteredVolunteers = all.filter((volunteer) => {
-    const status = volunteerToday(volunteer).label
-    const matchesFilter = filter === "All volunteers" || status === filter
-    return (
-      matchesFilter &&
-      `${volunteer.full_name} ${volunteer.service_area ?? ""} ${vehicleText(volunteer)} ${volunteer.phone ?? ""}`
-        .toLowerCase()
-        .includes(search.toLowerCase())
-    )
-  })
-
-  const fields = (value: VolunteerForm, change: (next: VolunteerForm) => void) => (
-    <>
-      <label>
-        Full name
-        <input
-          required
-          value={value.full_name}
-          onChange={(event) => change({ ...value, full_name: event.target.value })}
-          placeholder="e.g. Alex Rivera"
-        />
-      </label>
-      <label>
-        Mobile number
-        <input
-          type="tel"
-          value={value.phone}
-          onChange={(event) => change({ ...value, phone: event.target.value })}
-          placeholder="09XX XXX XXXX"
-        />
-      </label>
-      <label>
-        Service area
-        <input
-          value={value.service_area}
-          onChange={(event) => change({ ...value, service_area: event.target.value })}
-          placeholder="e.g. Quezon City"
-        />
-      </label>
-      <label>
-        Vehicle
-        <select
-          value={value.vehicle_type}
-          onChange={(event) => change({ ...value, vehicle_type: event.target.value as VehicleType })}
-        >
-          {Object.entries(VEHICLES).map(([type, name]) => (
-            <option key={type} value={type}>
-              {name}
-            </option>
-          ))}
-        </select>
-      </label>
-      {value.vehicle_type !== "none" && (
-        <label>
-          Can carry (kg)
-          <input
-            type="number"
-            min="0"
-            value={value.capacity_kg}
-            onChange={(event) => change({ ...value, capacity_kg: event.target.value })}
-            placeholder="e.g. 300"
-          />
-        </label>
-      )}
-    </>
-  )
-
-  return (
-    <AppShell go={go} active="volunteers" title="Volunteers" live>
-      <main className="dashboard-main">
-        <section className="page-heading">
-          <div>
-            <p className="eyebrow">Community</p>
-            <h1>Volunteers</h1>
-            <p>Drivers and helpers who move food from farms to tables.</p>
-          </div>
-          {canManage && (
-            <button
-              type="button"
-              className="primary-action"
-              onClick={() => {
-                setMessage(null)
-                setShowInviteForm((open) => !open)
-              }}
-            >
-              {showInviteForm ? "Cancel" : "+ Add volunteer"}
-            </button>
-          )}
-        </section>
-
-        {error && (
-          <div className="load-error" role="alert">
-            <span>{error}</span>
-            <button type="button" className="quiet-action" onClick={load}>
-              Try again
-            </button>
-          </div>
-        )}
-
-        <PageMetrics
-          items={[
-            {
-              label: "Active volunteers",
-              value: volunteers ? String(active.length) : "…",
-              detail: areas.size ? `Across ${areas.size} ${areas.size === 1 ? "area" : "areas"}` : "On the roster",
-              icon: "users",
-              tone: "lime",
-            },
-            {
-              label: "Available today",
-              value: volunteers ? String(availableToday) : "…",
-              detail: "Ready for assignments",
-              icon: "clock",
-              tone: "mint",
-            },
-            {
-              label: "Pickups completed",
-              value: volunteers ? String(completedThisMonth) : "…",
-              detail: "This month",
-              icon: "truck",
-              tone: "cream",
-            },
-            {
-              label: "Has a vehicle",
-              value: volunteers ? String(withVehicle.length) : "…",
-              detail: vehicleCounts || "No vehicles yet",
-              icon: "home",
-              tone: "lime",
-            },
-          ]}
-        />
-
-        {message && !selected && (
-          <p className={`page-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>
-            {message.text}
-          </p>
-        )}
-
-        {showInviteForm && (
-          <form className="inline-form ops-form" onSubmit={addVolunteer}>
-            <div>
-              <p className="eyebrow">New volunteer</p>
-              <strong>Add to the roster</strong>
-            </div>
-            {fields(form, setForm)}
-            <button type="submit" className="primary-action" disabled={saving}>
-              {saving ? "Adding..." : "Add volunteer"}
-            </button>
-          </form>
-        )}
-
-        <section className="panel records-panel">
-          <div className="records-heading">
-            <div>
-              <p className="eyebrow">People power</p>
-              <h2>
-                Volunteer roster <span>{filteredVolunteers.length}</span>
-              </h2>
-            </div>
-            <span className="date-chip">
-              <i className="availability-dot" /> {volunteers ? availableToday : "…"} available today
-            </span>
-          </div>
-          <ListToolbar
-            search={search}
-            onSearch={setSearch}
-            filters={["All volunteers", "Available", "On a pickup", "Off duty"]}
-            activeFilter={filter}
-            onFilter={setFilter}
-          />
-          <div className="table-scroll">
-            <div className="record-table volunteers-table">
-              <div className="record-table-head">
-                <span>Volunteer</span>
-                <span>Service area</span>
-                <span>Vehicle capacity</span>
-                <span>Contribution</span>
-                <span>Today</span>
-                <span></span>
-              </div>
-              {filteredVolunteers.map((volunteer) => {
-                const status = volunteerToday(volunteer)
-                const done = volunteer.pickups.filter((p) => p.status === "completed").length
-                return (
-                  <div className="record-row" key={volunteer.id}>
-                    <div className="record-primary">
-                      <span className="initial-avatar">{initials(volunteer.full_name)}</span>
-                      <div>
-                        <strong>{volunteer.full_name}</strong>
-                        <small>{volunteer.phone ?? "No phone yet"}</small>
-                      </div>
-                    </div>
-                    <span>{volunteer.service_area || "—"}</span>
-                    <span>{vehicleText(volunteer)}</span>
-                    <span>
-                      {done} {done === 1 ? "pickup" : "pickups"}
-                    </span>
-                    <StatusPill label={status.label} tone={status.tone} />
-                    <button type="button" className="row-action" onClick={() => openProfile(volunteer)}>
-                      View profile
-                    </button>
-                  </div>
-                )
-              })}
-              {volunteers && filteredVolunteers.length === 0 && (
-                <p className="empty-state">
-                  {all.length ? "No volunteers match your search." : "No volunteers yet. Add the first one above."}
-                </p>
-              )}
-              {!volunteers && !error && <p className="empty-state">Loading…</p>}
-            </div>
-          </div>
-        </section>
-
-        {selected && (
-          <div className="detail-backdrop" role="presentation" onClick={() => setSelected(null)}>
-            <section
-              className="detail-dialog"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="volunteer-detail-title"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <button
-                type="button"
-                className="detail-close"
-                aria-label="Close volunteer profile"
-                onClick={() => setSelected(null)}
-              >
-                ×
-              </button>
-              <span className="initial-avatar">{initials(selected.full_name)}</span>
-              <p className="eyebrow">Volunteer profile</p>
-              <h2 id="volunteer-detail-title">{selected.full_name}</h2>
-              {editing ? (
-                <form className="dialog-form" onSubmit={saveEdit}>
-                  {fields(editForm, setEditForm)}
-                  <label>
-                    Email
-                    <input
-                      type="email"
-                      value={editForm.email}
-                      onChange={(event) => setEditForm({ ...editForm, email: event.target.value })}
-                      placeholder="name@example.com"
-                    />
-                  </label>
-                  <div className="dialog-actions">
-                    <button type="submit" className="primary-action" disabled={saving}>
-                      {saving ? "Saving..." : "Save changes"}
-                    </button>
-                    <button type="button" className="outline-action" onClick={() => setEditing(false)}>
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <>
-                  <dl>
-                    <div>
-                      <dt>Service area</dt>
-                      <dd>{selected.service_area || "—"}</dd>
-                    </div>
-                    <div>
-                      <dt>Vehicle capacity</dt>
-                      <dd>{vehicleText(selected)}</dd>
-                    </div>
-                    <div>
-                      <dt>Contribution</dt>
-                      <dd>{selected.pickups.filter((p) => p.status === "completed").length} pickups</dd>
-                    </div>
-                    <div>
-                      <dt>Today</dt>
-                      <dd>{volunteerToday(selected).label}</dd>
-                    </div>
-                    <div>
-                      <dt>Mobile</dt>
-                      <dd>{selected.phone || "—"}</dd>
-                    </div>
-                    <div>
-                      <dt>Email</dt>
-                      <dd>{selected.email || "—"}</dd>
-                    </div>
-                  </dl>
-                  <div className="dialog-actions">
-                    <button
-                      type="button"
-                      className="primary-action"
-                      onClick={() => {
-                        setSelected(null)
-                        go("pickups")
-                      }}
-                    >
-                      View pickup schedule
-                    </button>
-                    {canManage && (
-                      <>
-                        <button type="button" className="outline-action" onClick={() => setEditing(true)}>
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="outline-action"
-                          disabled={saving}
-                          onClick={() => toggleDuty(selected)}
-                        >
-                          {selected.is_active ? "Set off duty" : "Set on duty"}
-                        </button>
-                        <button type="button" className="row-action danger" disabled={saving} onClick={() => remove(selected)}>
-                          Remove
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </>
-              )}
-              {message && (
-                <p className={`form-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>
-                  {message.text}
-                </p>
-              )}
-            </section>
-          </div>
-        )}
-      </main>
-    </AppShell>
-  )
-}
-
 // ── Recipients Screen ─────────────────────────────────────────────────────────
-type RecipientType = "food_bank" | "kitchen" | "pantry" | "shelter" | "rescue_partner" | "other"
+type RecipientType = "rescue_partner"
 type RecipientStatus = "open" | "limited" | "closed"
 
 type RecipientFull = RecipientRecord & {
   type: RecipientType
   contact_name: string | null
   phone: string | null
-  capacity: string | null
   needs: string | null
   status: RecipientStatus
   donations: { quantity_kg: number | string; status: DonationStatus; delivered_at: string | null }[]
 }
 
 const RECIPIENT_TYPES: Record<RecipientType, string> = {
-  food_bank: "Food bank",
-  kitchen: "Community kitchen",
-  pantry: "Neighborhood pantry",
-  shelter: "Community shelter",
-  rescue_partner: "Food rescue partner",
-  other: "Community partner",
+  rescue_partner: "Non-governmental organization",
 }
 
 const RECIPIENT_STATUS: Record<RecipientStatus, { label: string; tone: ActivityTone }> = {
   open: { label: "Open", tone: "green" },
-  limited: { label: "Limited capacity", tone: "amber" },
+  limited: { label: "Limited availability", tone: "amber" },
   closed: { label: "Closed", tone: "dark" },
 }
 
@@ -3273,18 +2712,16 @@ type RecipientForm = {
   address: string
   contact_name: string
   phone: string
-  capacity: string
   needs: string
   status: RecipientStatus
 }
 
 const emptyRecipient: RecipientForm = {
   name: "",
-  type: "food_bank",
+  type: "rescue_partner",
   address: "",
   contact_name: "",
   phone: "",
-  capacity: "",
   needs: "",
   status: "open",
 }
@@ -3297,7 +2734,6 @@ function recipientBody(form: RecipientForm) {
     address: clean(form.address),
     contact_name: clean(form.contact_name),
     phone: clean(form.phone),
-    capacity: clean(form.capacity),
     needs: clean(form.needs),
     status: form.status,
   }
@@ -3307,7 +2743,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
   const { account } = useSession()
   const canManage = canManageOps(account)
   const [search, setSearch] = useState("")
-  const [filter, setFilter] = useState("All recipients")
+  const [filter, setFilter] = useState("All partners")
   const [recipients, setRecipients] = useState<RecipientFull[] | null>(null)
   const [error, setError] = useState("")
   const [showAddForm, setShowAddForm] = useState(false)
@@ -3349,7 +2785,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
     save(() => api.post("/recipients", recipientBody(form)), `Added ${name}. It now appears when matching donations.`, () => {
       setForm(emptyRecipient)
       setShowAddForm(false)
-      setFilter("All recipients")
+      setFilter("All partners")
       setSearch("")
     })
   }
@@ -3363,7 +2799,6 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
       address: recipient.address ?? "",
       contact_name: recipient.contact_name ?? "",
       phone: recipient.phone ?? "",
-      capacity: recipient.capacity ?? "",
       needs: recipient.needs ?? "",
       status: recipient.status,
     })
@@ -3378,7 +2813,10 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
   }
 
   const remove = (recipient: RecipientFull) => {
-    if (!window.confirm(`Remove ${recipient.name}? This can't be undone.`)) return
+    const donationNote = recipient.donations.length
+      ? ` ${recipient.donations.length} associated ${recipient.donations.length === 1 ? "donation will" : "donations will"} remain, but will no longer be linked to this partner.`
+      : ""
+    if (!window.confirm(`Remove ${recipient.name}? This can't be undone.${donationNote}`)) return
     save(() => api.delete(`/recipients/${recipient.id}`), `Removed ${recipient.name}.`, () => setSelected(null))
   }
 
@@ -3392,7 +2830,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
 
   const filteredRecipients = all.filter((recipient) => {
     const status = RECIPIENT_STATUS[recipient.status].label
-    const matchesFilter = filter === "All recipients" || status === filter
+    const matchesFilter = filter === "All partners" || status === filter
     return (
       matchesFilter &&
       `${recipient.name} ${RECIPIENT_TYPES[recipient.type]} ${recipient.address ?? ""} ${recipient.needs ?? ""}`
@@ -3409,7 +2847,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
           required
           value={value.name}
           onChange={(event) => change({ ...value, name: event.target.value })}
-          placeholder="e.g. Community Pantry"
+          placeholder="e.g. Partner NGO"
         />
       </label>
       <label>
@@ -3441,14 +2879,6 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
       {full && (
         <>
           <label>
-            Capacity
-            <input
-              value={value.capacity}
-              onChange={(event) => change({ ...value, capacity: event.target.value })}
-              placeholder="e.g. 120 meals / day"
-            />
-          </label>
-          <label>
             Contact person
             <input
               value={value.contact_name}
@@ -3469,7 +2899,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
             Status
             <select value={value.status} onChange={(event) => change({ ...value, status: event.target.value as RecipientStatus })}>
               <option value="open">Open</option>
-              <option value="limited">Limited capacity</option>
+              <option value="limited">Limited availability</option>
               <option value="closed">Closed (hide from matching)</option>
             </select>
           </label>
@@ -3479,13 +2909,13 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
   )
 
   return (
-    <AppShell go={go} active="recipients" title="Recipients" live>
+    <AppShell go={go} active="recipients" title="Recipient Partners" live>
       <main className="dashboard-main">
         <section className="page-heading">
           <div>
             <p className="eyebrow">Community</p>
-            <h1>Recipients</h1>
-            <p>Food banks, kitchens, and pantries that receive donations.</p>
+            <h1>Recipient Partners</h1>
+            <p>NGO partners that receive donations.</p>
           </div>
           {canManage && (
             <button
@@ -3496,7 +2926,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
                 setShowAddForm((open) => !open)
               }}
             >
-              {showAddForm ? "Cancel" : "+ Add recipient"}
+              {showAddForm ? "Cancel" : "+ Add partner"}
             </button>
           )}
         </section>
@@ -3513,9 +2943,9 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
         <PageMetrics
           items={[
             {
-              label: "Community partners",
+              label: "Partners",
               value: recipients ? String(all.length) : "…",
-              detail: areas.size ? `Across ${areas.size} ${areas.size === 1 ? "area" : "areas"}` : "In the network",
+              detail: areas.size ? `Across ${areas.size} ${areas.size === 1 ? "area" : "areas"}` : "Partner organizations",
               icon: "home",
               tone: "lime",
             },
@@ -3529,7 +2959,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
             {
               label: "Open to donations",
               value: recipients ? String(openCount + limitedCount) : "…",
-              detail: `${limitedCount} at limited capacity`,
+              detail: `${limitedCount} with limited availability`,
               icon: "gift",
               tone: "cream",
             },
@@ -3553,11 +2983,11 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
           <form className="inline-form ops-form" onSubmit={addRecipient}>
             <div>
               <p className="eyebrow">New partner</p>
-              <strong>Add a recipient</strong>
+              <strong>Add an NGO partner</strong>
             </div>
             {fields(form, setForm, false)}
             <button type="submit" className="primary-action" disabled={saving}>
-              {saving ? "Adding..." : "Add recipient"}
+              {saving ? "Adding..." : "Add partner"}
             </button>
           </form>
         )}
@@ -3567,7 +2997,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
             <div>
               <p className="eyebrow">Where food goes</p>
               <h2>
-                Recipient network <span>{filteredRecipients.length}</span>
+                Recipient partners <span>{filteredRecipients.length}</span>
               </h2>
             </div>
             <button type="button" className="quiet-action" onClick={() => setFilter("Open")}>
@@ -3577,7 +3007,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
           <ListToolbar
             search={search}
             onSearch={setSearch}
-            filters={["All recipients", "Open", "Limited capacity", "Closed"]}
+            filters={["All partners", "Open", "Limited availability", "Closed"]}
             activeFilter={filter}
             onFilter={setFilter}
           />
@@ -3587,7 +3017,6 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
                 <span>Organization</span>
                 <span>Partner type</span>
                 <span>Location</span>
-                <span>Capacity</span>
                 <span>Priority needs</span>
                 <span>Status</span>
                 {canManage && <span></span>}
@@ -3608,7 +3037,6 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
                     </div>
                     <span>{RECIPIENT_TYPES[recipient.type]}</span>
                     <span title={recipient.address ?? ""}>{recipient.address || "—"}</span>
-                    <span>{recipient.capacity || "—"}</span>
                     <span title={recipient.needs ?? ""}>{recipient.needs || "—"}</span>
                     <StatusPill label={status.label} tone={status.tone} />
                     {canManage && (
@@ -3621,7 +3049,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
               })}
               {recipients && filteredRecipients.length === 0 && (
                 <p className="empty-state">
-                  {all.length ? "No recipients match your search." : "No recipients yet. Add a food bank above."}
+                  {all.length ? "No partners match your search." : "No NGO partners yet. Add a partner above."}
                 </p>
               )}
               {!recipients && !error && <p className="empty-state">Loading…</p>}
@@ -3647,7 +3075,7 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
                 ×
               </button>
               <span className="initial-avatar recipient-avatar">{initials(selected.name)}</span>
-              <p className="eyebrow">Edit recipient</p>
+              <p className="eyebrow">Edit NGO partner</p>
               <h2 id="recipient-edit-title">{selected.name}</h2>
               <form className="dialog-form" onSubmit={saveEdit}>
                 {fields(editForm, setEditForm, true)}
@@ -3658,13 +3086,9 @@ function RecipientsScreen({ go }: { go: (s: Screen) => void }) {
                   <button type="button" className="outline-action" onClick={() => setSelected(null)}>
                     Cancel
                   </button>
-                  {selected.donations.length === 0 ? (
-                    <button type="button" className="row-action danger" disabled={saving} onClick={() => remove(selected)}>
-                      Remove
-                    </button>
-                  ) : (
-                    <small className="dialog-note">Has donations, so it can't be removed. Set it to Closed instead.</small>
-                  )}
+                  <button type="button" className="row-action danger" disabled={saving} onClick={() => remove(selected)}>
+                    Remove partner
+                  </button>
                 </div>
               </form>
               {message && (
@@ -3702,7 +3126,7 @@ type ReportData = {
   top_farms: { name: string; kg: number }[]
   top_produce: { name: string; kg: number }[]
   top_recipients: { name: string; kg: number }[]
-  top_volunteers: { name: string; pickups: number }[]
+  top_partner_ngos: { name: string; kg: number }[]
 }
 
 const REPORT_PERIODS: { label: string; value: ReportData["period"]; phrase: string }[] = [
@@ -3871,7 +3295,7 @@ function ReportsScreen({ go }: { go: (s: Screen) => void }) {
               tone: "mint",
             },
             {
-              label: "Community partners",
+              label: "Partners",
               value: totals ? String(totals.partner_farms + totals.partner_recipients) : "…",
               detail: totals ? `${totals.partner_farms} farms · ${totals.partner_recipients} recipients` : "",
               icon: "users",
@@ -3972,18 +3396,18 @@ function ReportsScreen({ go }: { go: (s: Screen) => void }) {
               "No deliveries yet.",
             )}
             {ranking(
-              "Food banks · kg received",
+              "Recipients · kg received",
               (data?.top_recipients ?? []).map((row) => ({ name: row.name, value: `${formatKg(row.kg)} kg`, share: share(row.kg, data?.top_recipients ?? []) })),
               "No deliveries yet.",
             )}
             {ranking(
-              "Volunteers · pickups",
-              (data?.top_volunteers ?? []).map((row) => ({
+              "Partner NGOs · kg received",
+              (data?.top_partner_ngos ?? []).map((row) => ({
                 name: row.name,
-                value: `${row.pickups} ${row.pickups === 1 ? "pickup" : "pickups"}`,
-                share: share(row.pickups, data?.top_volunteers ?? []),
+                value: `${formatKg(row.kg)} kg`,
+                share: share(row.kg, data?.top_partner_ngos ?? []),
               })),
-              "No completed pickups yet.",
+              "No deliveries to partner NGOs yet.",
             )}
           </div>
         </section>
@@ -4133,6 +3557,7 @@ type FarmerDonation = {
   status: DonationStatus
   harvested_at: string | null
   shelf_life_days: number | null
+  farmer_shelf_life_days: number | null
   expires_at: string | null
   condition: Condition | null
   logistics: Logistics
@@ -4150,7 +3575,6 @@ type FarmerDonation = {
     id: string
     scheduled_at: string
     status: string
-    volunteer: { full_name: string; phone: string | null } | null
   }[]
 }
 
@@ -4228,10 +3652,9 @@ function quantityText(donation: FarmerDonation) {
   return `${formatKg(donation.quantity_kg)} kg`
 }
 
-function shelfLifeLeft(donation: FarmerDonation) {
-  if (donation.status !== "new") return "—"
-  if (!donation.expires_at) return "—"
-  return daysText(daysBetween(new Date(), new Date(donation.expires_at)))
+function calculatedRemainingShelfLife(donation: FarmerDonation) {
+  if (!donation.harvested_at || donation.shelf_life_days === null) return null
+  return donation.shelf_life_days - daysBetween(toLocalDate(donation.harvested_at), new Date())
 }
 
 // ── Home ──────────────────────────────────────────────────────────────────────
@@ -4322,7 +3745,7 @@ function FarmerDashboardScreen({ go }: { go: (s: Screen) => void }) {
             {
               label: "Food rescued",
               value: stats ? `${formatKg(stats.kg_rescued)} kg` : "…",
-              detail: "Reached a food bank",
+              detail: "Reached a recipient",
               icon: "leaf",
               tone: "lime",
             },
@@ -4346,7 +3769,7 @@ function FarmerDashboardScreen({ go }: { go: (s: Screen) => void }) {
               <div className="record-table-head">
                 <span>Crop</span>
                 <span>Qty</span>
-                <span>Food bank</span>
+                <span>Recipient</span>
                 <span>Status</span>
                 <span></span>
               </div>
@@ -4396,6 +3819,7 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
   const [quantity, setQuantity] = useState("")
   const [unit, setUnit] = useState<Unit>("kg")
   const [harvestDate, setHarvestDate] = useState(todayValue())
+  const [farmerShelfLifeDays, setFarmerShelfLifeDays] = useState("")
   const [condition, setCondition] = useState<Condition>("fresh")
   const [useSaved, setUseSaved] = useState(true)
   const [pickupAddress, setPickupAddress] = useState("")
@@ -4423,6 +3847,7 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
           setQuantity(String(Number(donation.quantity ?? donation.quantity_kg)))
           setUnit(donation.unit ?? "kg")
           setHarvestDate(donation.harvested_at ?? todayValue())
+          setFarmerShelfLifeDays(donation.farmer_shelf_life_days?.toString() ?? "")
           setCondition(donation.condition ?? "fresh")
           setUseSaved(donation.use_saved_location)
           setPickupAddress(donation.use_saved_location ? "" : donation.pickup_address ?? "")
@@ -4430,6 +3855,7 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
           setNotes(donation.notes ?? "")
         } else {
           setCropId((current) => current || cropRows[0]?.id || "")
+          setFarmerShelfLifeDays("")
           setLogistics(profile.farm.usual_logistics ?? "pickup")
         }
       })
@@ -4462,6 +3888,7 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
       quantity: Number(quantity),
       unit,
       harvested_at: harvestDate,
+      farmer_shelf_life_days: Number(farmerShelfLifeDays),
       condition,
       logistics,
       use_saved_location: useSaved,
@@ -4489,7 +3916,7 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
           <div>
             <p className="eyebrow">{editId ? "Edit donation" : "Log surplus"}</p>
             <h1>{editId ? "Edit surplus crop" : "Log surplus crop"}</h1>
-            <p>Post excess harvest so the coordinator can match it to a food bank.</p>
+            <p>Post excess harvest so the coordinator can match it to a recipient.</p>
           </div>
         </section>
 
@@ -4545,6 +3972,20 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
               </label>
 
               <label className="log-field">
+                <span>Your shelf life (days)</span>
+                <input
+                  required
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={farmerShelfLifeDays}
+                  onChange={(event) => setFarmerShelfLifeDays(event.target.value)}
+                  placeholder="Enter shelf life in days"
+                />
+                <small>Enter the shelf life for this harvest. Remaining life is calculated from the crop's typical shelf life and harvest date.</small>
+              </label>
+
+              <label className="log-field">
                 <span>Condition</span>
                 <select value={condition} onChange={(event) => setCondition(event.target.value as Condition)}>
                   {Object.entries(CONDITIONS).map(([value, label]) => (
@@ -4597,19 +4038,19 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
             </fieldset>
 
             <fieldset className="log-section">
-              <legend>How will the crop get to the food bank?</legend>
+              <legend>How will the crop get to the recipient?</legend>
               <div className="choice-cards">
                 <label className={`choice-card ${logistics === "pickup" ? "selected" : ""}`}>
                   <input type="radio" name="logistics" checked={logistics === "pickup"} onChange={() => setLogistics("pickup")} />
                   <span>
                     <strong>I need pickup</strong>
-                    The receiving food bank collects it
+                    The recipient collects it
                   </span>
                 </label>
                 <label className={`choice-card ${logistics === "deliver" ? "selected" : ""}`}>
                   <input type="radio" name="logistics" checked={logistics === "deliver"} onChange={() => setLogistics("deliver")} />
                   <span>
-                    <strong>I can deliver</strong>I bring it to the matched food bank
+                    <strong>I can deliver</strong>I bring it to the matched recipient
                   </span>
                 </label>
               </div>
@@ -4650,11 +4091,15 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
                 <dd>{crop?.name ?? "—"}</dd>
               </div>
               <div>
+                <dt>Farmer-entered shelf life</dt>
+                <dd>{farmerShelfLifeDays ? daysText(Number(farmerShelfLifeDays)) : "—"}</dd>
+              </div>
+              <div>
                 <dt>Typical shelf life</dt>
                 <dd>{crop ? daysText(crop.shelf_life_days) : "—"}</dd>
               </div>
               <div>
-                <dt>Remaining (from harvest date)</dt>
+                <dt>Calculated remaining shelf life</dt>
                 <dd className={remaining !== null && remaining < 0 ? "warn" : ""}>
                   {remaining === null ? "—" : daysText(remaining)}
                 </dd>
@@ -4665,8 +4110,8 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
               </div>
             </dl>
             <p>
-              Shelf life is set by the crop table, not typed in. If no food bank is matched before it runs out, the
-              donation is marked Expired.
+              Remaining shelf life and expiry use the crop&apos;s typical shelf life and harvest date. If no recipient
+              is matched before it runs out, the donation is marked Expired.
             </p>
           </aside>
         </div>
@@ -4704,6 +4149,7 @@ function FarmerDonationsScreen({ go }: { go: (s: Screen) => void }) {
   const visible = filter === "All" ? all : all.filter((d) => stageOf(d) === filter)
   const selected = visible.find((d) => d.id === selectedId) ?? visible[0] ?? null
   const stage = selected ? stageOf(selected) : null
+  const calculatedRemaining = selected ? calculatedRemainingShelfLife(selected) : null
   const canChange = stage === "Posted"
 
   const edit = () => {
@@ -4790,7 +4236,7 @@ function FarmerDonationsScreen({ go }: { go: (s: Screen) => void }) {
                   <span>Qty</span>
                   <span>Harvested</span>
                   <span>Logistics</span>
-                  <span>Food bank</span>
+                  <span>Recipient</span>
                   <span>Status</span>
                 </div>
                 {visible.map((donation) => (
@@ -4833,9 +4279,13 @@ function FarmerDonationsScreen({ go }: { go: (s: Screen) => void }) {
                   <dd>{shortDate(selected.harvested_at)}</dd>
                 </div>
                 <div>
-                  <dt>Shelf life left</dt>
-                  <dd>
-                    <strong>{shelfLifeLeft(selected)}</strong>
+                  <dt>Farmer-entered shelf life</dt>
+                  <dd>{selected.farmer_shelf_life_days ? daysText(selected.farmer_shelf_life_days) : "—"}</dd>
+                </div>
+                <div>
+                  <dt>Calculated remaining shelf life</dt>
+                  <dd className={calculatedRemaining !== null && calculatedRemaining < 0 ? "warn" : ""}>
+                    {calculatedRemaining === null ? "—" : daysText(calculatedRemaining)}
                   </dd>
                 </div>
                 <div>
@@ -4854,17 +4304,14 @@ function FarmerDonationsScreen({ go }: { go: (s: Screen) => void }) {
                 </div>
                 {selected.recipient && (
                   <div>
-                    <dt>Food bank</dt>
+                    <dt>Recipient</dt>
                     <dd>{selected.recipient.name}</dd>
                   </div>
                 )}
                 {pickup && (
                   <div>
                     <dt>Pickup</dt>
-                    <dd>
-                      {formatDateTime(pickup.scheduled_at)}
-                      {pickup.volunteer ? ` · ${pickup.volunteer.full_name}` : ""}
-                    </dd>
+                    <dd>{formatDateTime(pickup.scheduled_at)}</dd>
                   </div>
                 )}
                 {selected.notes && (
@@ -4882,7 +4329,7 @@ function FarmerDonationsScreen({ go }: { go: (s: Screen) => void }) {
                   <span>{formatDateTime(selected.created_at)}</span>
                 </li>
                 <li className={selected.matched_at ? "done" : ""}>
-                  <strong>Matched to a food bank</strong>
+                  <strong>Matched to a recipient</strong>
                   {selected.matched_at && (
                     <span>
                       {formatDateTime(selected.matched_at)}
@@ -4908,7 +4355,7 @@ function FarmerDonationsScreen({ go }: { go: (s: Screen) => void }) {
 
               {stage === "Rejected" && (
                 <div className="rejection-box">
-                  <strong>Reason from the food bank:</strong> {selected.rejection_reason || "No reason given."}
+                  <strong>Reason from the recipient:</strong> {selected.rejection_reason || "No reason given."}
                 </div>
               )}
             </aside>
@@ -5148,7 +4595,6 @@ export default function App() {
     donations: <DonationsScreen go={go} />,
     pickups: <PickupsScreen go={go} />,
     farmers: <FarmersScreen go={go} />,
-    volunteers: <VolunteersScreen go={go} />,
     recipients: <RecipientsScreen go={go} />,
     reports: <ReportsScreen go={go} />,
     "farmer-status": <FarmerStatusScreen go={go} />,

@@ -14,7 +14,7 @@ from ..schemas import ForgotPassword, ProfileUpdate, Refresh, ResetPassword, Sig
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-STAFF_ROLES = {"admin", "coordinator", "volunteer"}
+STAFF_ROLES = {"admin", "coordinator"}
 
 
 def _auth_error(exc: AuthApiError) -> HTTPException:
@@ -100,6 +100,13 @@ def sign_in(body: SignIn):
     client.postgrest.auth(session.access_token)
     info = account(client, session.user.id)
     role = info["profile"]["role"]
+
+    if role not in STAFF_ROLES | {"farmer"}:
+        try:
+            client.auth.admin.sign_out(session.access_token, "local")
+        except AuthApiError:
+            pass
+        raise HTTPException(403, "This account is no longer active.")
 
     wrong_card = (
         (body.role == "farmer" and role != "farmer")

@@ -13,7 +13,7 @@ export const CHANGED_EVENT = "silo:changed"
 export const UNDO_EVENT = "silo:undo"
 
 // ── Types (match what the backend returns) ────────────────────────────────────
-export type Role = "admin" | "coordinator" | "volunteer" | "farmer"
+export type Role = "admin" | "coordinator" | "farmer" | "retired"
 export type FarmStatus = "pending" | "approved" | "rejected" | "suspended"
 export type DonationStatus =
   | "new"

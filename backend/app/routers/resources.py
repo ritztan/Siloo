@@ -1,4 +1,4 @@
-"""Farmers, volunteers, recipients, donations, pickups."""
+"""Farmers, recipients, donations, pickups."""
 
 from typing import Optional
 from datetime import datetime, timedelta, timezone
@@ -11,7 +11,7 @@ from .. import activity
 from ..db import get_db, get_token, one, run
 from ..schemas import (
     DonationIn, DonationUpdate, FarmerIn, FarmerUpdate, PickupIn, PickupUpdate,
-    RecipientIn, RecipientUpdate, RejectDonation, VolunteerIn, VolunteerUpdate, to_row,
+    RecipientIn, RecipientUpdate, RejectDonation, to_row,
 )
 from .auth import _user_id
 from .crud import crud_router
@@ -62,19 +62,7 @@ def suspend_farmer(farmer_id: UUID, token: str = Depends(get_token), db: Client 
     return _review(farmer_id, "suspended", token, db)
 
 
-# ---------- volunteers & recipients ----------
-
-volunteers = crud_router(
-    table="volunteers", prefix="/volunteers", label="Volunteer",
-    create_model=VolunteerIn, update_model=VolunteerUpdate, search_column="full_name",
-    # each volunteer comes with their pickups, for "N pickups" and "On a pickup"
-    select="*, pickups(status, scheduled_at)",
-    name_of=lambda row: row.get("full_name") or "volunteer",
-    describe_update=lambda db, before, changes: (
-        f"Set {before['full_name']} {'on' if changes['is_active'] else 'off'} duty"
-        if set(changes) == {"is_active"} else f"Edited {before['full_name']}"
-    ),
-)
+# ---------- recipients ----------
 
 recipients = crud_router(
     table="recipients", prefix="/recipients", label="Recipient",
@@ -92,7 +80,7 @@ def _describe_donation(db: Client, before: dict, changes: dict) -> str:
     produce = before.get("produce") or "donation"
     if changes.get("status") == "matched" and changes.get("recipient_id"):
         recipient = activity.snapshot(db, "recipients", str(changes["recipient_id"]))
-        return f"Matched {produce} → {recipient['name'] if recipient else 'a food bank'}"
+        return f"Matched {produce} → {recipient['name'] if recipient else 'a recipient'}"
     if changes.get("status") == "cancelled":
         return f"Cancelled {produce}"
     if changes.get("status") == "delivered":
@@ -106,7 +94,7 @@ donations = crud_router(
     search_column="produce", has_status=True,
     select=(
         "*, farmer:farmers(id, farm_name), recipient:recipients(id, name), "
-        "pickups(id, scheduled_at, status, volunteer_id)"
+        "pickups(id, scheduled_at, status)"
     ),
     name_of=lambda row: row.get("produce") or "donation",
     added_word="Logged",
@@ -117,7 +105,7 @@ donations = crud_router(
 
 @donations.post("/{donation_id}/reject", tags=["donations"])
 def reject_donation(donation_id: UUID, body: RejectDonation, db: Client = Depends(get_db)):
-    """The food bank can't take it: mark Rejected with a reason the farmer will see."""
+    """The recipient can't take it: mark Rejected with a reason the farmer will see."""
     before = activity.snapshot(db, "donations", str(donation_id))
     rows = run(
         db.table("donations").update({"status": "rejected", "rejection_reason": body.reason.strip()})
@@ -132,14 +120,14 @@ def reject_donation(donation_id: UUID, body: RejectDonation, db: Client = Depend
 
 @donations.post("/{donation_id}/receive", tags=["donations"])
 def receive_donation(donation_id: UUID, db: Client = Depends(get_db)):
-    """For farmers who deliver it themselves: the food bank received it."""
+    """For farmers who deliver it themselves: mark the recipient as having received it."""
     before = activity.snapshot(db, "donations", str(donation_id))
     rows = run(
         db.table("donations")
         .update({"status": "delivered", "delivered_at": datetime.now(timezone.utc).isoformat()})
         .eq("id", str(donation_id)).in_("status", ["matched", "pickup_scheduled"])
     )
-    updated = one(rows, "Donation (match it to a food bank first)")
+    updated = one(rows, "Donation (match it to a recipient first)")
     if before:
         activity.log(db, action="donations.received", table="donations", record_id=str(donation_id),
                      kind="update", row=before, label=f"Marked {before['produce']} received")
@@ -150,7 +138,7 @@ def receive_donation(donation_id: UUID, db: Client = Depends(get_db)):
 pickups = APIRouter(prefix="/pickups", tags=["pickups"])
 PICKUP_SELECT = (
     "*, donation:donations(id, produce, quantity_kg, status, farmer:farmers(farm_name), "
-    "recipient:recipients(name)), volunteer:volunteers(id, full_name, phone)"
+    "recipient:recipients(name))"
 )
 
 
@@ -158,7 +146,6 @@ PICKUP_SELECT = (
 def list_pickups(
     day: Optional[str] = None,
     status: Optional[str] = None,
-    unassigned: bool = False,
     db: Client = Depends(get_db),
 ):
     """day=today or day=YYYY-MM-DD (Philippine time) limits to that day."""
@@ -175,8 +162,6 @@ def list_pickups(
         )
     if status:
         query = query.eq("status", status)
-    if unassigned:
-        query = query.is_("volunteer_id", "null")
     return run(query)
 
 
@@ -205,8 +190,7 @@ def create_pickup(body: PickupIn, db: Client = Depends(get_db)):
 
 @pickups.patch("/{pickup_id}")
 def update_pickup(pickup_id: UUID, body: PickupUpdate, db: Client = Depends(get_db)):
-    """Assign a volunteer, reschedule, or change status.
-    Completing a pickup marks its donation as delivered."""
+    """Reschedule or change status. Completing a pickup marks its donation as delivered."""
     changes = to_row(body, partial=True)
     if not changes:
         raise HTTPException(422, "Nothing to update.")
@@ -251,13 +235,8 @@ def _log_pickup_update(db: Client, pickup_id: str, changes: dict, before: Option
         label = f"Marked {produce} delivered"
     elif status == "cancelled":
         label = f"Cancelled pickup for {produce}"
-    elif changes.get("volunteer_id"):
-        volunteer = activity.snapshot(db, "volunteers", str(changes["volunteer_id"]))
-        label = f"Assigned {volunteer['full_name'] if volunteer else 'a volunteer'} to {produce}"
-    elif "volunteer_id" in changes:
-        label = f"Unassigned volunteer from {produce}"
     else:
-        label = f"Rescheduled pickup for {produce}"
+        label = f"Updated pickup for {produce}"
     # completing or cancelling also changes the donation, so remember it too
     extra = [activity.related("donations", before["donation_id"], "update", donation)] if status in ("completed", "cancelled") and donation else []
     activity.log(db, action=f"pickups.{status or 'update'}", table="pickups", record_id=pickup_id,

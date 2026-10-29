@@ -1697,6 +1697,7 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
     if (next?.kind === "log") setFarmId((current) => current || farms[0]?.id || "")
     if (next?.kind === "match") setRecipientId(next.donation.recipient?.id ?? recipients[0]?.id ?? "")
     if (next?.kind === "schedule") {
+      setRecipientId(next.donation.recipient?.id ?? recipients[0]?.id ?? "")
       setPickupAt(localDateTime(2))
     }
     if (next?.kind === "reject") setReason("")
@@ -1744,11 +1745,13 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
   const schedulePickup = (donation: DonationRecord) => (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     run(async () => {
+      await api.patch(`/donations/${donation.id}`, { recipient_id: recipientId, status: "matched" })
       await api.post("/pickups", {
         donation_id: donation.id,
         scheduled_at: new Date(pickupAt).toISOString(),
       })
-      return `Pickup scheduled for ${formatDateTime(new Date(pickupAt).toISOString())}.`
+      const partner = recipients.find((recipient) => recipient.id === recipientId)?.name
+      return `Pickup for ${donation.produce} to ${partner} scheduled for ${formatDateTime(new Date(pickupAt).toISOString())}.`
     })
   }
 
@@ -1962,10 +1965,19 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
               <strong>
                 {panel.donation.produce} · {formatKg(panel.donation.quantity_kg)} kg
               </strong>
-              <small className="form-sub">
-                {panel.donation.farmer?.farm_name} → {panel.donation.recipient?.name}
-              </small>
+              <small className="form-sub">{panel.donation.farmer?.farm_name}</small>
             </div>
+            <label>
+              Recipient partner
+              <select required value={recipientId} onChange={(event) => setRecipientId(event.target.value)}>
+                {recipients.length === 0 && <option value="">No open partners available</option>}
+                {recipients.map((recipient) => (
+                  <option key={recipient.id} value={recipient.id}>
+                    {recipient.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label>
               Pickup time
               <input
@@ -1978,7 +1990,7 @@ function DonationsScreen({ go }: { go: (s: Screen) => void }) {
             <button type="button" className="outline-action" onClick={() => setPanel(null)}>
               Close
             </button>
-            <button type="submit" className="primary-action" disabled={saving}>
+            <button type="submit" className="primary-action" disabled={saving || !recipientId}>
               {saving ? "Saving..." : "Schedule"}
             </button>
             {message?.kind === "error" && <p className="form-message error" role="alert">{message.text}</p>}
@@ -3643,11 +3655,6 @@ function quantityText(donation: FarmerDonation) {
   return `${formatKg(donation.quantity_kg)} kg`
 }
 
-function calculatedRemainingShelfLife(donation: FarmerDonation) {
-  if (!donation.harvested_at || donation.shelf_life_days === null) return null
-  return donation.shelf_life_days - daysBetween(toLocalDate(donation.harvested_at), new Date())
-}
-
 // ── Home ──────────────────────────────────────────────────────────────────────
 function FarmerDashboardScreen({ go }: { go: (s: Screen) => void }) {
   const { account, setAccount } = useSession()
@@ -4140,7 +4147,6 @@ function FarmerDonationsScreen({ go }: { go: (s: Screen) => void }) {
   const visible = filter === "All" ? all : all.filter((d) => stageOf(d) === filter)
   const selected = visible.find((d) => d.id === selectedId) ?? visible[0] ?? null
   const stage = selected ? stageOf(selected) : null
-  const calculatedRemaining = selected ? calculatedRemainingShelfLife(selected) : null
   const canChange = stage === "Posted"
 
   const edit = () => {
@@ -4274,12 +4280,6 @@ function FarmerDonationsScreen({ go }: { go: (s: Screen) => void }) {
                   <dd>{selected.farmer_shelf_life_days ? daysText(selected.farmer_shelf_life_days) : "—"}</dd>
                 </div>
                 <div>
-                  <dt>Calculated remaining shelf life</dt>
-                  <dd className={calculatedRemaining !== null && calculatedRemaining < 0 ? "warn" : ""}>
-                    {calculatedRemaining === null ? "—" : daysText(calculatedRemaining)}
-                  </dd>
-                </div>
-                <div>
                   <dt>Condition</dt>
                   <dd>{selected.condition ? CONDITION_SHORT[selected.condition] : "—"}</dd>
                 </div>
@@ -4293,24 +4293,20 @@ function FarmerDonationsScreen({ go }: { go: (s: Screen) => void }) {
                     {selected.use_saved_location ? "Saved farm location" : selected.pickup_address || "Different pickup point"}
                   </dd>
                 </div>
-                {selected.recipient && (
-                  <div>
-                    <dt>Recipient</dt>
-                    <dd>{selected.recipient.name}</dd>
-                  </div>
-                )}
+                <div>
+                  <dt>Recipient</dt>
+                  <dd>{selected.recipient?.name ?? "—"}</dd>
+                </div>
                 {pickup && (
                   <div>
                     <dt>Pickup</dt>
                     <dd>{formatDateTime(pickup.scheduled_at)}</dd>
                   </div>
                 )}
-                {selected.notes && (
-                  <div>
-                    <dt>Notes</dt>
-                    <dd>{selected.notes}</dd>
-                  </div>
-                )}
+                <div>
+                  <dt>Notes</dt>
+                  <dd>{selected.notes || "—"}</dd>
+                </div>
               </dl>
 
               <h3 className="history-title">Status history</h3>

@@ -373,16 +373,7 @@ h1:before { content: ''; position: absolute; inset: 0 auto 0 0; width: 3px; bord
 .login-intro h1, .signup-heading h1 { margin: 0; padding: 0; color: var(--forest); font-size: clamp(29px, 3vw, 42px); line-height: 1.08; letter-spacing: -.055em; }
 .login-intro h1:before, .signup-heading h1:before { display: none; }
 .login-intro > p:not(.auth-eyebrow) { max-width: 440px; margin: 15px 0 20px; color: var(--muted); font-size: 11px; line-height: 1.7; }
-.login-hero-art { min-height: 245px; position: relative; display: grid; place-items: center; overflow: hidden; border: 1px solid #d6e5d8; border-radius: 12px; background: linear-gradient(155deg, #f3f8ed 0%, #e8f1e4 54%, #d7e9d8 100%); }
-.login-hero-art:before, .login-hero-art:after { content: ''; position: absolute; width: 150%; height: 1px; background: rgba(36,115,86,.18); transform: rotate(27deg); }
-.login-hero-art:before { top: 35%; left: -20%; }.login-hero-art:after { top: 68%; left: -20%; transform: rotate(-24deg); }
-.hero-sun { width: 54px; height: 54px; position: absolute; top: 34px; right: 48px; border-radius: 50%; background: #d7e6a9; box-shadow: 0 0 0 12px rgba(215,230,169,.2); }
-.hero-hill { width: 90%; height: 72%; position: absolute; bottom: -34%; border-radius: 50% 50% 0 0; transform: rotate(-7deg); }
-.hill-back { right: -15%; background: #b7d3a6; }.hill-front { left: -20%; bottom: -48%; background: #7fac78; transform: rotate(7deg); }
-.hero-leaves { width: 70px; height: 95px; position: absolute; z-index: 1; bottom: 28px; left: 48%; border-left: 3px solid #376f4d; transform: rotate(5deg); }
-.hero-leaves i { width: 25px; height: 13px; position: absolute; left: 1px; border-radius: 100% 0 100% 0; background: #4c8758; transform: rotate(-26deg); }
-.hero-leaves i:nth-child(1) { top: 19px; left: -24px; }.hero-leaves i:nth-child(2) { top: 42px; left: 3px; transform: rotate(30deg) scaleX(-1); }.hero-leaves i:nth-child(3) { top: 62px; left: -22px; }
-.login-hero-art > span { position: absolute; z-index: 2; right: 14px; bottom: 12px; padding: 6px 9px; border: 1px solid rgba(255,255,255,.55); border-radius: 99px; color: var(--forest); background: rgba(255,255,255,.72); font-size: 8px; font-weight: 800; }
+.login-hero-art { width: 100%; min-height: 245px; display: block; overflow: hidden; border: 1px solid #d6e5d8; border-radius: 12px; object-fit: cover; }
 .login-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .login-card { min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: white; box-shadow: 0 12px 30px rgba(11,48,37,.045); }
 .login-card-heading { min-height: 27px; margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }

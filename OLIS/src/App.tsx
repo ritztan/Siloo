@@ -829,20 +829,11 @@ function SignInScreen({ go }: { go: (s: Screen) => void }) {
             spoilage risk and distance, then matches each one to a partner food
             bank.
           </p>
-          <div
+          <img
             className="login-hero-art"
-            aria-label="Illustration of a growing field"
-          >
-            <div className="hero-sun" />
-            <div className="hero-hill hill-back" />
-            <div className="hero-hill hill-front" />
-            <div className="hero-leaves">
-              <i />
-              <i />
-              <i />
-            </div>
-            <span>Every harvest has a home.</span>
-          </div>
+            src="/login-farm.jpeg"
+            alt="Green farmland with crops growing in rows"
+          />
         </div>
 
         <div className="login-cards">

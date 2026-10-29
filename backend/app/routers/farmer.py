@@ -15,8 +15,6 @@ router = APIRouter(prefix="/farmer", tags=["farmer"])
 
 # Days and "end of day" are counted in Philippine time
 PH = timezone(timedelta(hours=8))
-UNIT_TO_KG = {"kg": 1.0, "g": 0.001, "tonne": 1000.0}
-
 DONATION_SELECT = (
     "*, crop:crops(id, name, shelf_life_days), recipient:recipients(name), "
     "pickups(id, scheduled_at, status)"
@@ -62,7 +60,7 @@ def _donation_row(db: Client, farm: dict, body: FarmerDonationIn) -> dict:
     if expires < datetime.now(PH):
         raise HTTPException(422, f"This {crop['name'].lower()} is already past its {crop['shelf_life_days']}-day shelf life, so it can't be posted.")
 
-    quantity_kg = round(float(body.quantity) * UNIT_TO_KG[body.unit], 2)
+    quantity_kg = round(float(body.quantity), 2)
     if quantity_kg <= 0:
         raise HTTPException(422, "Quantity is too small. Enter at least 0.01 kg.")
 

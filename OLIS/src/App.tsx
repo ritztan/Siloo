@@ -3546,7 +3546,6 @@ function FarmerStatusScreen({ go }: { go: (s: Screen) => void }) {
 
 // ── Farmer portal: shared bits ────────────────────────────────────────────────
 type Crop = { id: string; name: string; shelf_life_days: number }
-type Unit = "kg" | "g" | "tonne"
 type Condition = "fresh" | "good" | "fair"
 type Logistics = "pickup" | "deliver"
 
@@ -3555,7 +3554,7 @@ type FarmerDonation = {
   crop_id: string | null
   produce: string
   quantity: number | string | null
-  unit: Unit
+  unit: string
   quantity_kg: number | string
   status: DonationStatus
   harvested_at: string | null
@@ -3649,9 +3648,6 @@ function daysText(days: number) {
 }
 
 function quantityText(donation: FarmerDonation) {
-  if (donation.quantity !== null && donation.quantity !== undefined && donation.unit && donation.unit !== "kg") {
-    return `${formatKg(donation.quantity)} ${donation.unit}`
-  }
   return `${formatKg(donation.quantity_kg)} kg`
 }
 
@@ -3815,7 +3811,6 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
   // form
   const [cropId, setCropId] = useState("")
   const [quantity, setQuantity] = useState("")
-  const [unit, setUnit] = useState<Unit>("kg")
   const [harvestDate, setHarvestDate] = useState(todayValue())
   const [farmerShelfLifeDays, setFarmerShelfLifeDays] = useState("")
   const [condition, setCondition] = useState<Condition>("fresh")
@@ -3842,8 +3837,7 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
             setError("This donation is no longer Posted, so it can't be edited.")
           }
           setCropId(donation.crop_id ?? cropRows.find((c) => c.name === donation.produce)?.id ?? cropRows[0]?.id ?? "")
-          setQuantity(String(Number(donation.quantity ?? donation.quantity_kg)))
-          setUnit(donation.unit ?? "kg")
+          setQuantity(String(Number(donation.quantity_kg)))
           setHarvestDate(donation.harvested_at ?? todayValue())
           setFarmerShelfLifeDays(donation.farmer_shelf_life_days?.toString() ?? "")
           setCondition(donation.condition ?? "fresh")
@@ -3884,7 +3878,7 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
     const body = {
       crop_id: cropId,
       quantity: Number(quantity),
-      unit,
+      unit: "kg",
       harvested_at: harvestDate,
       farmer_shelf_life_days: Number(farmerShelfLifeDays),
       condition,
@@ -3938,7 +3932,7 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
               </label>
 
               <div className="log-field">
-                <span id="qty-label">Estimated quantity</span>
+                <span id="qty-label">Estimated quantity (kg)</span>
                 <div className="qty-row">
                   <input
                     required
@@ -3950,11 +3944,7 @@ function FarmerLogScreen({ go }: { go: (s: Screen) => void }) {
                     value={quantity}
                     onChange={(event) => setQuantity(event.target.value)}
                   />
-                  <select aria-label="Unit" value={unit} onChange={(event) => setUnit(event.target.value as Unit)}>
-                    <option value="kg">kg</option>
-                    <option value="g">g</option>
-                    <option value="tonne">tonne</option>
-                  </select>
+                  <span className="qty-unit">kg</span>
                 </div>
               </div>
 

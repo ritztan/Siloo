@@ -122,7 +122,6 @@ class DonationUpdate(BaseModel):
     notes: Optional[str] = None
 
 
-Unit = Literal["kg", "g", "tonne"]
 Condition = Literal["fresh", "good", "fair"]
 Logistics = Literal["pickup", "deliver"]
 
@@ -131,7 +130,7 @@ class FarmerDonationIn(BaseModel):
     """A donation a farmer logs from the "Log surplus crop" form (also used for Edit)."""
     crop_id: UUID
     quantity: Decimal = Field(gt=0)
-    unit: Unit = "kg"
+    unit: Literal["kg"] = "kg"
     harvested_at: date
     farmer_shelf_life_days: int = Field(gt=0)
     condition: Condition = "fresh"
